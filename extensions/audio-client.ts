@@ -57,6 +57,12 @@ export interface RecordingStatus {
   error?: string;
 }
 
+export interface CleanupResult {
+  recordings: number;
+  generated: number;
+  total: number;
+}
+
 interface ClientConfig {
   service?: { host?: string; port?: number };
 }
@@ -246,8 +252,17 @@ export class AudioServiceClient {
     if (await this.isHealthy()) await this.request("POST", "/v1/playback/stop", {});
   }
 
+  async cleanupStorage(): Promise<CleanupResult> {
+    return this.request("POST", "/v1/storage/cleanup", {}, 30_000);
+  }
+
   async shutdown(): Promise<void> {
     if (await this.isHealthy()) {
+      try {
+        await this.cleanupStorage();
+      } catch {
+        // Final service shutdown retries cleanup and must not be skipped.
+      }
       try {
         await this.request("POST", "/shutdown", {}, 3000);
       } catch {

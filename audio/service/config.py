@@ -75,6 +75,7 @@ def load_config(config_path: str) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
         config = json.load(handle)
     root = path.parent
+    config["_configRoot"] = str(root)
 
     storage = config.setdefault("storage", {})
     for key in ("models", "cache", "recordings", "generated", "voices"):

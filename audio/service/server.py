@@ -30,6 +30,18 @@ else:
     from .recording import RecordingManager
 
 
+TRANSIENT_AUDIO_SUFFIXES = frozenset({
+    ".wav",
+    ".flac",
+    ".mp3",
+    ".ogg",
+    ".m4a",
+    ".aac",
+    ".opus",
+    ".tmp",
+})
+
+
 class AudioApplication:
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
@@ -134,12 +146,65 @@ class AudioApplication:
                 timestamps=bool(payload.get("timestamps", False)),
             )
 
-    def shutdown(self) -> None:
+    def _cleanup_storage_directory(self, storage_key: str) -> int:
+        target = Path(self.config["storage"][storage_key]).resolve()
+        config_root = Path(self.config["_configRoot"]).resolve()
+        blocked_targets = {
+            Path(target.anchor).resolve(),
+            Path.home().resolve(),
+            config_root,
+        }
+        if target in blocked_targets:
+            raise RuntimeError(f"Refusing to clean unsafe {storage_key} directory: {target}")
+        protected_roots = {
+            (config_root / name).resolve()
+            for name in (".venv", "cache", "datasets", "evaluations", "models", "training", "voices")
+        }
+        protected_roots.update(
+            Path(value).resolve()
+            for key, value in self.config["storage"].items()
+            if key in {"cache", "models", "voices"}
+        )
+        if any(target == root or root in target.parents for root in protected_roots):
+            raise RuntimeError(f"Refusing to clean protected {storage_key} directory: {target}")
+        if not target.exists():
+            return 0
+        if not target.is_dir():
+            raise RuntimeError(f"Configured {storage_key} path is not a directory: {target}")
+
+        deleted = 0
+        for item in target.iterdir():
+            if item.suffix.lower() not in TRANSIENT_AUDIO_SUFFIXES:
+                continue
+            if not (item.is_file() or item.is_symlink()):
+                continue
+            try:
+                item.unlink()
+                deleted += 1
+            except FileNotFoundError:
+                pass
+        return deleted
+
+    def cleanup_transient_audio(self) -> dict[str, int]:
         self.recordings.stop_active()
         try:
             self.playback.stop()
         except Exception:
             pass
+        with self.work_lock:
+            recordings = self._cleanup_storage_directory("recordings")
+            generated = self._cleanup_storage_directory("generated")
+        return {
+            "recordings": recordings,
+            "generated": generated,
+            "total": recordings + generated,
+        }
+
+    def shutdown(self) -> None:
+        try:
+            self.cleanup_transient_audio()
+        except Exception:
+            traceback.print_exc()
         with self.work_lock:
             self.tts.unload()
             self.asr.unload()
@@ -227,6 +292,8 @@ class Handler(BaseHTTPRequestHandler):
             self._run(lambda: (self.app.playback.stop() or {"stopped": True}))
         elif self.path == "/v1/playback/generated":
             self._run(lambda: self.app.play_generated(self._payload()))
+        elif self.path == "/v1/storage/cleanup":
+            self._run(self.app.cleanup_transient_audio)
         elif self.path == "/shutdown":
             self._json(HTTPStatus.OK, {"shuttingDown": True})
             threading.Thread(target=self.app.shutdown, name="shutdown", daemon=True).start()

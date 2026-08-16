@@ -108,7 +108,7 @@ Restart Pi or run `/reload`, then use:
 
 Outside call mode, `/mic` inserts the transcript into the editor so it can be reviewed before sending. In call mode, the transcript is sent immediately; after the assistant finishes and audio playback completes, recording starts again.
 
-`/tts`, `/mic`, `/call`, `/voice`, `tts_speak`, `voice_select`, and `asr_transcribe` all refuse to operate after `/pichat off`. `/pichat off` also stops recording/playback, unloads TTS, and shuts down the localhost service.
+`/tts`, `/mic`, `/call`, `/voice`, `tts_speak`, `voice_select`, and `asr_transcribe` all refuse to operate after `/pichat off`. `/pichat off` also stops recording/playback, unloads TTS, and shuts down the localhost service. Session shutdown and replacement remove transient microphone recordings and generated speech; models, voice manifests, datasets, and training outputs are retained.
 
 The model can call three reusable tools:
 
