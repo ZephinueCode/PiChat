@@ -350,7 +350,6 @@ export function installAudioExtension(pi: ExtensionAPI): AudioController {
     const cycle = state.generation;
     try {
       if (text) {
-        safeNotify(ctx, "Generating speech…");
         const result = await client.speak({ text, play: false, interrupt: true });
         if (cycle !== state.generation || !state.ttsEnabled) return;
         revealAssistant(ctx);
