@@ -60,22 +60,39 @@ Inside Pi:
 
 ### Optional local audio setup
 
-On Windows, run this once from the PiChat checkout:
+Run the setup script once from the PiChat checkout.
+
+On Windows:
 
 ```powershell
 .\audio\setup.ps1
 ```
 
-The setup script creates `audio/.venv`, installs normal Python dependencies from the Tsinghua PyPI mirror, installs the NVIDIA CUDA build of PyTorch from PyTorch's official wheel index, and downloads these model weights from ModelScope:
+On Linux:
+
+```bash
+chmod +x audio/setup.sh
+./audio/setup.sh
+```
+
+The Linux script supports apt, dnf, pacman, and zypper for the PortAudio system dependency. Use `--skip-system-packages` when PortAudio is already available or system packages are managed separately.
+
+Both setup scripts create `audio/.venv`, install normal Python dependencies from the Tsinghua PyPI mirror, install PyTorch from PyTorch's official wheel index, and download these model weights from ModelScope:
 
 - `Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice`
 - `iic/SenseVoiceSmall`
 
-CUDA wheels are not published on standard PyPI mirrors, so PyTorch is the only dependency that does not come from the Tsinghua mirror. To make a CPU-only environment, use:
+PyTorch wheels are not published on standard PyPI mirrors, so PyTorch is the only dependency that does not come from the Tsinghua mirror. To make a CPU-only environment, use:
 
 ```powershell
 .\audio\setup.ps1 -CpuOnly
 ```
+
+```bash
+./audio/setup.sh --cpu-only
+```
+
+To install dependencies without downloading the model weights, use `-SkipModels` on Windows or `--skip-models` on Linux. Linux and Windows virtual environments cannot share the same `audio/.venv` directory.
 
 Restart Pi or run `/reload`, then use:
 
