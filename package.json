@@ -16,12 +16,15 @@
     "extensions": [
       "./extensions/index.ts"
     ],
+    "skills": [
+      "./skills"
+    ],
     "themes": [
       "./themes/pichat-dark.json"
     ]
   },
   "scripts": {
-    "test": "node --experimental-strip-types --test tests/speech-text.test.ts"
+    "test": "node --experimental-strip-types --test tests/speech-text.test.ts tests/training-status.test.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

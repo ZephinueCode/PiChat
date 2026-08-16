@@ -110,11 +110,12 @@ Outside call mode, `/mic` inserts the transcript into the editor so it can be re
 
 `/tts`, `/mic`, `/call`, `/voice`, `tts_speak`, `voice_select`, and `asr_transcribe` all refuse to operate after `/pichat off`. `/pichat off` also stops recording/playback, unloads TTS, and shuts down the localhost service. Session shutdown and replacement remove transient microphone recordings and generated speech; models, voice manifests, datasets, and training outputs are retained.
 
-The model can call three reusable tools:
+The model can call four reusable tools:
 
 - `tts_speak` synthesizes an explicit utterance and optionally plays it.
 - `voice_select` selects an installed voice requested by an active persona skill.
 - `asr_transcribe` transcribes an existing audio file; it never opens the microphone.
+- `voice_training_status` inspects training readiness and existing local artifacts without loading models or reading transcript contents.
 
 Automatic per-reply TTS is handled by Pi lifecycle events rather than relying on the model to call a tool. While TTS is enabled, the extension holds back streamed assistant prose, waits for `agent_settled`, generates one complete utterance, reveals the full reply, starts playback, and only advances the call loop after playback finishes. Tool rendering remains native and is never folded into the held text bubble or speech input.
 
@@ -130,7 +131,7 @@ Local settings live in `audio/config.local.json`. The committed example is [`aud
 
 Only the stable voice ID belongs in the skill. Model paths, devices, reference recordings, and service details stay in PiChat. Explicit `/skill:name` invocation and normal agent `SKILL.md` reads both activate the sidecar voice. Missing or broken skill voices fall back to the manually selected voice and then the configured default without blocking the text reply.
 
-To fine-tune and register a new Qwen3-TTS CustomVoice checkpoint, follow the local-only pipeline in [`audio/training/README.md`](audio/training/README.md). It includes a 12GB GPU preset, corrected causal/codebook loss alignment, fixed evaluation sentences, pace regression metrics, and private manifest registration.
+To fine-tune and register a new Qwen3-TTS CustomVoice checkpoint, follow the local-only pipeline in [`audio/training/README.md`](audio/training/README.md). It includes a 12GB GPU preset, corrected causal/codebook loss alignment, fixed evaluation sentences, pace regression metrics, and private manifest registration. PiChat also publishes the progressively disclosed `/skill:pichat-voice-training`; when a training task matches, Pi can load the workflow on demand and use `voice_training_status` to determine which stage is already complete.
 
 The audio service binds only to `127.0.0.1` and requires a random per-process bearer token. Environments, models, caches, generated audio, recordings, private profiles, and local configuration are excluded by `.gitignore`.
 

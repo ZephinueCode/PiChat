@@ -1,0 +1,4 @@
+interface:
+  display_name: "PiChat Voice Training"
+  short_description: "Train and register local PiChat voices"
+  default_prompt: "Use $pichat-voice-training to prepare, train, evaluate, and register a custom local voice."

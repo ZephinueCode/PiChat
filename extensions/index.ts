@@ -10,6 +10,7 @@ import {
   runtimeState,
 } from "./chat-layout.ts";
 import { installAudioExtension } from "./audio.ts";
+import { installVoiceTrainingExtension } from "./voice-training.ts";
 
 const THEME_NAME = "pichat-dark";
 const STATUS_KEY = "pichat";
@@ -88,6 +89,7 @@ function hideTyping(ctx: ExtensionContext): void {
 export default function pichatExtension(pi: ExtensionAPI): void {
   installChatLayoutPatch();
   const audio = installAudioExtension(pi);
+  installVoiceTrainingExtension(pi);
 
   pi.on("session_start", (_event, ctx) => {
     configureChatUi(ctx);
