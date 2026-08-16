@@ -8,6 +8,7 @@ import {
   installChatLayoutPatch,
   runtimeState,
 } from "./chat-layout.ts";
+import { installAudioExtension } from "./audio.ts";
 
 const THEME_NAME = "pichat-dark";
 const STATUS_KEY = "pichat";
@@ -86,6 +87,7 @@ function hideTyping(ctx: ExtensionContext): void {
 
 export default function pichatExtension(pi: ExtensionAPI): void {
   installChatLayoutPatch();
+  const audio = installAudioExtension(pi);
 
   pi.on("session_start", (_event, ctx) => {
     configureChatUi(ctx);
@@ -99,8 +101,9 @@ export default function pichatExtension(pi: ExtensionAPI): void {
     hideTyping(ctx);
   });
 
-  pi.on("session_shutdown", (_event, ctx) => {
+  pi.on("session_shutdown", async (_event, ctx) => {
     hideTyping(ctx);
+    await audio.shutdown(ctx);
   });
 
   pi.registerCommand("pichat", {
@@ -109,6 +112,7 @@ export default function pichatExtension(pi: ExtensionAPI): void {
       const mode = args.trim().toLowerCase();
       if (mode === "off") {
         disableChatUi(ctx);
+        await audio.disable(ctx);
         ctx.ui.notify("PiChat UI is disabled for this process. It will be enabled again after restarting Pi.", "info");
         return;
       }

@@ -1,14 +1,16 @@
 {
   "name": "pichat",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "A WeChat-inspired conversation TUI for Pi.",
+  "description": "A private-chat TUI for Pi with optional local TTS and ASR.",
   "keywords": [
     "pi-package",
     "pi-extension",
     "tui",
-    "chat"
+    "chat",
+    "tts",
+    "asr"
   ],
   "pi": {
     "extensions": [
@@ -19,6 +21,7 @@
     ]
   },
   "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*"
   }

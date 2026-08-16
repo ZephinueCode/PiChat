@@ -1,0 +1,5 @@
+qwen-tts==0.1.1
+funasr==1.4.2
+modelscope>=1.39.0,<2
+sounddevice==0.5.5
+soundfile>=0.14.0,<1

@@ -1,0 +1,48 @@
+{
+  "service": {
+    "host": "127.0.0.1",
+    "port": 17863
+  },
+  "storage": {
+    "models": "models",
+    "cache": "cache",
+    "recordings": "recordings",
+    "generated": "generated"
+  },
+  "tts": {
+    "model": "models/Qwen3-TTS-12Hz-0.6B-CustomVoice",
+    "device": "auto",
+    "dtype": "bfloat16",
+    "attention": "sdpa",
+    "defaultProfile": "default",
+    "profiles": {
+      "default": {
+        "mode": "customVoice",
+        "speaker": "Serena",
+        "language": "Auto",
+        "instruct": ""
+      }
+    }
+  },
+  "asr": {
+    "model": "models/SenseVoiceSmall",
+    "device": "cpu",
+    "language": "auto",
+    "useItn": true
+  },
+  "recording": {
+    "device": null,
+    "sampleRate": 16000,
+    "channels": 1,
+    "blockMs": 30,
+    "preRollMs": 300,
+    "silenceMs": 1100,
+    "minimumSpeechMs": 250,
+    "startupTimeoutMs": 10000,
+    "maximumDurationMs": 45000,
+    "energyThreshold": 0.012
+  },
+  "playback": {
+    "device": null
+  }
+}
