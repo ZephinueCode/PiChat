@@ -13,6 +13,8 @@ PiChat is a local Pi package that makes interactive Pi sessions read like a priv
 - TTS reads only conversational prose. Thinking, tool calls/results, fenced and inline code, code-like lines, URLs, paths, logs, tables, math, emoji, and decorative symbols are excluded.
 - Optional microphone input uses silence detection and local FunASR transcription.
 - On wide terminals, PiChat shows a WeChat-like list of saved chats for the current directory. `/chat` focuses that existing sidebar: use ↑/↓ to select a chat, Enter to resume it, and Escape to return to the editor.
+- `/repost N` queues recent conversational context, including tool calls and results in that range, for another saved chat selected directly in the sidebar. Unopened handoffs are marked with `(!)`.
+- The `share` tool lets an agent list saved chats, send a curated handoff only when the user requests it, and read large received evidence on demand.
 - The editor, footer, abort keys, model controls, session storage, and LLM context are unchanged.
 
 The presentation layer does not rewrite user messages, assistant messages, tool results, or saved session content. Voice-call transcripts are ordinary user messages and therefore are saved in the session just like typed messages.
@@ -78,6 +80,35 @@ Escape                 Return keyboard control to the editor
 Each row shows the saved chat title, last-modified time, stored model, and message count. Resuming uses Pi's native session-switch operation, so the transcript, LLM context, model, thinking level, session metadata, and subsequent saved messages all move together. Use Pi's native `/model` command when you only want to change the model inside the current chat.
 
 The chat list is a root-layout column, not an overlay: it uses roughly the left one-fifth of a wide terminal while Pi's complete native workspace uses the remaining four-fifths. Messages, tool calls, code, status rows, the editor, and the footer all receive the right column's real width, so the sidebar cannot cover them. It automatically falls back to Pi's original single-column layout below 90 columns. `/chat` does not create a modal; it temporarily routes navigation keys to the existing sidebar and then returns control to the native editor.
+
+### Session handoffs
+
+To repost recent work without switching away from the current chat:
+
+```text
+/repost 6             Focus the sidebar and choose a receiving chat
+↑/↓, Home/End         Move between eligible target chats
+Enter                 Queue the handoff and remain in the current chat
+Escape                Cancel and return to the editor
+```
+
+`N` counts recent user/assistant messages with conversational text. Tool calls, tool results, and shell results inside the selected range are attached without consuming that count; thinking/reasoning and previously received handoffs are excluded. Handoffs are currently limited to saved sessions in the same working directory.
+
+PiChat uses a mailbox instead of modifying an inactive session file behind Pi's back. A queued target shows `(!)` in the chat list. Opening that chat imports the handoff as a distinct `Shared context` transcript block and clears the marker. Importing never starts the target model: the agent receives the shared context together with the user's next normal message. Press `Ctrl+O` to expand or collapse the displayed handoff.
+
+The agent-facing `share` tool supports three actions:
+
+- `list`: return eligible saved chats with stable session IDs, models, and unread counts.
+- `send`: queue a concise purpose and agent-curated note, with optional recent messages and tool evidence. Its tool guidance permits sending only after an explicit user request.
+- `read`: list a received packet's raw-item manifest or page through a large item by ID, offset, and limit.
+
+Context projections are bounded, label forwarded tool output as untrusted historical evidence, and keep larger raw items in the local mailbox for on-demand reading. The default mailbox is:
+
+```text
+~/.pi/agent/pichat/handoffs/
+```
+
+Set `PICHAT_HANDOFF_DIR` to override that path, which is also useful for isolated testing. Inbox writes use temporary files plus atomic rename; delivered packets move to a per-session archive so raw evidence remains available to `share read` without staying unread.
 
 ### Optional local audio setup
 

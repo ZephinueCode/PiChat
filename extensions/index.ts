@@ -10,6 +10,7 @@ import {
   runtimeState,
 } from "./chat-layout.ts";
 import { installAudioExtension } from "./audio.ts";
+import { installAgentShare } from "./agent-share.ts";
 import { installModelFriends } from "./model-friends.ts";
 import { installVoiceTrainingExtension } from "./voice-training.ts";
 
@@ -90,11 +91,18 @@ function hideTyping(ctx: ExtensionContext): void {
 export default function pichatExtension(pi: ExtensionAPI): void {
   installChatLayoutPatch();
   const audio = installAudioExtension(pi);
-  const friends = installModelFriends(pi);
+  const agentShare = installAgentShare(pi);
+  const friends = installModelFriends(pi, agentShare);
   installVoiceTrainingExtension(pi);
 
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", async (_event, ctx) => {
     configureChatUi(ctx);
+    try {
+      await agentShare.deliverPending(ctx);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.ui.notify(`Could not open shared context: ${message}`, "warning");
+    }
     friends.sync(ctx);
   });
 

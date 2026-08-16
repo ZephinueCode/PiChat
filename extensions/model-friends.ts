@@ -22,6 +22,10 @@ import {
   runtimeState,
 } from "./chat-layout.ts";
 import { FRIENDS_MIN_TERMINAL_WIDTH } from "./friends-layout.ts";
+import type {
+  AgentShareController,
+  HandoffTarget,
+} from "./agent-share.ts";
 
 const CHAT_STATUS_KEY = "pichat-chat";
 const MAX_FALLBACK_VISIBLE_CHATS = 12;
@@ -33,8 +37,13 @@ interface ChatSession {
   modelLabel: string;
   modified: Date;
   messageCount: number;
+  unreadCount: number;
   active: boolean;
 }
+
+type SidebarSelectionMode =
+  | { kind: "chat" }
+  | { kind: "repost"; messageCount: number };
 
 export interface ModelFriendsController {
   sync(ctx: ExtensionContext): void;
@@ -99,6 +108,7 @@ function sessionTitle(info: SessionInfo): string {
 function toChatSessions(
   infos: readonly SessionInfo[],
   ctx: ExtensionContext,
+  unreadCount: (sessionId: string) => number,
 ): ChatSession[] {
   const currentPath = ctx.sessionManager.getSessionFile();
   const chats = infos
@@ -111,6 +121,7 @@ function toChatSessions(
         modelLabel: active ? currentModelLabel(ctx) : storedModelLabel(info),
         modified: info.modified,
         messageCount: info.messageCount,
+        unreadCount: unreadCount(info.id),
         active,
       };
     })
@@ -124,6 +135,7 @@ function toChatSessions(
       modelLabel: currentModelLabel(ctx),
       modified: new Date(),
       messageCount: ctx.sessionManager.getEntries().filter((entry) => entry.type === "message").length,
+      unreadCount: unreadCount(ctx.sessionManager.getSessionId()),
       active: true,
     });
   }
@@ -147,7 +159,7 @@ function formatChatTime(date: Date, now = new Date()): string {
 class ChatListPane implements Component {
   private chats: ChatSession[] = [];
   private selectedIndex = 0;
-  private selecting = false;
+  private selectionMode: SidebarSelectionMode | undefined;
   private loading = true;
 
   constructor(private readonly theme: Theme) {}
@@ -168,32 +180,59 @@ class ChatListPane implements Component {
   }
 
   isSelecting(): boolean {
-    return this.selecting;
+    return Boolean(this.selectionMode);
   }
 
-  beginSelection(): boolean {
+  beginSelection(mode: SidebarSelectionMode): boolean {
     if (this.chats.length === 0) return false;
-    this.selecting = true;
+    this.selectionMode = mode;
     const active = this.chats.findIndex((chat) => chat.active);
-    this.selectedIndex = active >= 0 ? active : 0;
+    if (mode.kind === "repost") {
+      const firstTarget = this.chats.findIndex((chat) => !chat.active && Boolean(chat.path));
+      if (firstTarget < 0) {
+        this.selectionMode = undefined;
+        return false;
+      }
+      this.selectedIndex = firstTarget;
+    } else {
+      this.selectedIndex = active >= 0 ? active : 0;
+    }
     return true;
   }
 
   endSelection(): void {
-    this.selecting = false;
+    this.selectionMode = undefined;
     const active = this.chats.findIndex((chat) => chat.active);
     if (active >= 0) this.selectedIndex = active;
   }
 
-  move(delta: 1 | -1): void {
-    if (this.chats.length === 0) return;
-    this.selectedIndex =
-      (this.selectedIndex + delta + this.chats.length) % this.chats.length;
+  currentSelectionMode(): SidebarSelectionMode | undefined {
+    return this.selectionMode;
   }
 
-  moveTo(edge: "first" | "last"): void {
+  move(delta: 1 | -1, targetsOnly = false): void {
     if (this.chats.length === 0) return;
-    this.selectedIndex = edge === "first" ? 0 : this.chats.length - 1;
+    for (let step = 1; step <= this.chats.length; step += 1) {
+      const candidate =
+        (this.selectedIndex + delta * step + this.chats.length * step) % this.chats.length;
+      const chat = this.chats[candidate]!;
+      if (!targetsOnly || (!chat.active && Boolean(chat.path))) {
+        this.selectedIndex = candidate;
+        return;
+      }
+    }
+  }
+
+  moveTo(edge: "first" | "last", targetsOnly = false): void {
+    if (this.chats.length === 0) return;
+    const indexes = edge === "first"
+      ? this.chats.map((_chat, index) => index)
+      : this.chats.map((_chat, index) => index).reverse();
+    const candidate = indexes.find((index) => {
+      const chat = this.chats[index]!;
+      return !targetsOnly || (!chat.active && Boolean(chat.path));
+    });
+    if (candidate !== undefined) this.selectedIndex = candidate;
   }
 
   selectedChat(): ChatSession | undefined {
@@ -247,18 +286,20 @@ class ChatListPane implements Component {
 
   private titleRow(chat: ChatSession, width: number, selected: boolean): string {
     const time = formatChatTime(chat.modified);
+    const unread = chat.unreadCount > 0 ? "(!)" : "";
     const prefix = "  ";
-    const titleWidth = Math.max(3, width - visibleWidth(prefix) - visibleWidth(time) - 1);
+    const suffixWidth = visibleWidth(time) + (unread ? visibleWidth(unread) + 1 : 0);
+    const titleWidth = Math.max(3, width - visibleWidth(prefix) - suffixWidth - 1);
     const title = truncatePlainText(chat.title, titleWidth);
     const gap = " ".repeat(
-      Math.max(1, width - visibleWidth(prefix) - visibleWidth(title) - visibleWidth(time)),
+      Math.max(1, width - visibleWidth(prefix) - visibleWidth(title) - suffixWidth),
     );
     const styledTitle = this.theme.fg(
       chat.active ? "accent" : "text",
       title,
     );
     return this.row(
-      `${prefix}${styledTitle}${gap}${this.theme.fg("dim", time)}`,
+      `${prefix}${styledTitle}${gap}${unread ? `${this.theme.fg("warning", unread)} ` : ""}${this.theme.fg("dim", time)}`,
       width,
       selected ? "selectedBg" : "customMessageBg",
     );
@@ -282,7 +323,9 @@ class ChatListPane implements Component {
   render(width: number): string[] {
     const w = Math.max(12, width);
     const count = this.loading ? "…" : `${this.chats.length}`;
-    const title = " Chats";
+    const title = this.selectionMode?.kind === "repost"
+      ? ` Repost ${this.selectionMode.messageCount}`
+      : " Chats";
     const titleGap = " ".repeat(
       Math.max(1, w - visibleWidth(title) - visibleWidth(count) - 1),
     );
@@ -295,7 +338,11 @@ class ChatListPane implements Component {
         this.theme.fg(
           "dim",
           truncatePlainText(
-            this.selecting ? " ↑/↓ select · Enter open" : " /chat to select",
+            this.selectionMode?.kind === "repost"
+              ? " ↑/↓ target · Enter send"
+              : this.selectionMode
+                ? " ↑/↓ select · Enter open"
+                : " /chat to select",
             w,
           ),
         ),
@@ -317,7 +364,7 @@ class ChatListPane implements Component {
         Math.floor(Math.max(6, terminalRows - 5) / 2),
       ),
     );
-    const focusIndex = this.selecting
+    const focusIndex = this.selectionMode
       ? this.selectedIndex
       : Math.max(0, this.chats.findIndex((chat) => chat.active));
     const start = Math.max(
@@ -331,7 +378,7 @@ class ChatListPane implements Component {
 
     for (let index = start; index < end; index++) {
       const chat = this.chats[index]!;
-      const selected = this.selecting
+      const selected = this.selectionMode
         ? index === this.selectedIndex
         : chat.active;
       lines.push(
@@ -354,7 +401,10 @@ class ChatListPane implements Component {
   invalidate(): void {}
 }
 
-export function installModelFriends(pi: ExtensionAPI): ModelFriendsController {
+export function installModelFriends(
+  pi: ExtensionAPI,
+  handoff: AgentShareController,
+): ModelFriendsController {
   let pane: ChatListPane | undefined;
   let loadGeneration = 0;
   let inputUnsubscribe: (() => void) | undefined;
@@ -392,7 +442,7 @@ export function installModelFriends(pi: ExtensionAPI): ModelFriendsController {
         ctx.sessionManager.getSessionDir(),
       );
       if (generation !== loadGeneration || target !== pane) return;
-      target.update(toChatSessions(sessions, ctx));
+      target.update(toChatSessions(sessions, ctx, (sessionId) => handoff.unreadCount(sessionId)));
       updateStatus(ctx);
       refreshFriendsLayout();
     } catch (error) {
@@ -444,9 +494,46 @@ export function installModelFriends(pi: ExtensionAPI): ModelFriendsController {
     }
   };
 
-  const beginSidebarSelection = (ctx: ExtensionCommandContext): void => {
+  const sendRepost = async (
+    ctx: ExtensionCommandContext,
+    chat: ChatSession,
+    messageCount: number,
+  ): Promise<void> => {
+    if (chat.active) {
+      ctx.ui.notify("Choose another chat as the repost target.", "warning");
+      return;
+    }
+    if (!chat.path) {
+      ctx.ui.notify("The target chat has not been saved yet.", "warning");
+      return;
+    }
+    try {
+      const result = await handoff.repost(
+        ctx,
+        {
+          id: chat.id,
+          title: chat.title,
+          cwd: ctx.sessionManager.getCwd(),
+          path: chat.path,
+        } satisfies HandoffTarget,
+        messageCount,
+      );
+      ctx.ui.notify(
+        `Reposted ${result.packet.stats.conversationMessages} message${result.packet.stats.conversationMessages === 1 ? "" : "s"} to '${chat.title}' (${result.packet.stats.toolCalls} tool call${result.packet.stats.toolCalls === 1 ? "" : "s"}, ${result.packet.stats.toolResults} result${result.packet.stats.toolResults === 1 ? "" : "s"}, ~${result.estimatedTokens} context tokens).`,
+        "info",
+      );
+      await loadSessions(ctx);
+    } catch (error) {
+      ctx.ui.notify(`Repost failed: ${errorText(error)}`, "error");
+    }
+  };
+
+  const beginSidebarSelection = (
+    ctx: ExtensionCommandContext,
+    mode: SidebarSelectionMode,
+  ): void => {
     if (ctx.mode !== "tui") {
-      ctx.ui.notify("/chat is available in Pi's interactive TUI.", "info");
+      ctx.ui.notify(`/${mode.kind === "chat" ? "chat" : "repost"} is available in Pi's interactive TUI.`, "info");
       return;
     }
     if (!runtimeState.enabled || !runtimeState.friendsVisible) {
@@ -463,37 +550,46 @@ export function installModelFriends(pi: ExtensionAPI): ModelFriendsController {
     }
     const target = ensurePane(ctx);
     if (target.isSelecting()) return;
-    if (!target.beginSelection()) {
-      ctx.ui.notify("No saved chats are available yet.", "info");
+    if (!target.beginSelection(mode)) {
+      ctx.ui.notify(
+        mode.kind === "repost" ? "No other saved chat is available as a repost target." : "No saved chats are available yet.",
+        "info",
+      );
       return;
     }
 
     inputUnsubscribe = ctx.ui.onTerminalInput((data) => {
       if (!target.isSelecting()) return undefined;
+      const targetsOnly = target.currentSelectionMode()?.kind === "repost";
       if (matchesKey(data, Key.up)) {
-        target.move(-1);
+        target.move(-1, targetsOnly);
         refreshFriendsLayout();
         return { consume: true };
       }
       if (matchesKey(data, Key.down)) {
-        target.move(1);
+        target.move(1, targetsOnly);
         refreshFriendsLayout();
         return { consume: true };
       }
       if (matchesKey(data, Key.home)) {
-        target.moveTo("first");
+        target.moveTo("first", targetsOnly);
         refreshFriendsLayout();
         return { consume: true };
       }
       if (matchesKey(data, Key.end)) {
-        target.moveTo("last");
+        target.moveTo("last", targetsOnly);
         refreshFriendsLayout();
         return { consume: true };
       }
       if (matchesKey(data, Key.enter)) {
         const selected = target.selectedChat();
+        const selectedMode = target.currentSelectionMode();
         finishSelection();
-        if (selected) void switchChat(ctx, selected);
+        if (selected && selectedMode?.kind === "repost") {
+          void sendRepost(ctx, selected, selectedMode.messageCount);
+        } else if (selected) {
+          void switchChat(ctx, selected);
+        }
         return { consume: true };
       }
       if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
@@ -538,7 +634,7 @@ export function installModelFriends(pi: ExtensionAPI): ModelFriendsController {
     handler: async (rawArgs, ctx) => {
       const arg = rawArgs.trim();
       if (!arg) {
-        beginSidebarSelection(ctx);
+        beginSidebarSelection(ctx, { kind: "chat" });
         return;
       }
 
@@ -601,6 +697,27 @@ export function installModelFriends(pi: ExtensionAPI): ModelFriendsController {
         return;
       }
       ctx.ui.notify(`No saved chat matches '${arg}'.`, "warning");
+    },
+  });
+
+  pi.registerCommand("repost", {
+    description: "Repost recent chat messages and associated tool results to another saved PiChat session",
+    handler: async (rawArgs, ctx) => {
+      const value = rawArgs.trim();
+      if (!/^\d+$/.test(value)) {
+        ctx.ui.notify(`Usage: /repost N (N must be an integer from 1 to 50).`, "warning");
+        return;
+      }
+      const messageCount = Number(value);
+      if (!Number.isSafeInteger(messageCount) || messageCount < 1 || messageCount > 50) {
+        ctx.ui.notify("Repost count must be an integer from 1 to 50.", "warning");
+        return;
+      }
+      if (!ctx.isIdle()) {
+        ctx.ui.notify("Wait for the current reply to finish before reposting its context.", "warning");
+        return;
+      }
+      beginSidebarSelection(ctx, { kind: "repost", messageCount });
     },
   });
 
