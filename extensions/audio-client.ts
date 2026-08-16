@@ -20,6 +20,12 @@ export interface SpeechResult {
   outputPath: string;
 }
 
+export interface PlaybackResult {
+  requestId: string;
+  durationMs: number;
+  played: boolean;
+}
+
 export interface TranscriptionResult {
   text: string;
   language: string;
@@ -182,6 +188,16 @@ export class AudioServiceClient {
   }): Promise<SpeechResult> {
     await this.ensureStarted();
     return this.request("POST", "/v1/audio/speech", input, 600_000);
+  }
+
+  async playGenerated(requestId: string, interrupt = true): Promise<PlaybackResult> {
+    await this.ensureStarted();
+    return this.request(
+      "POST",
+      "/v1/playback/generated",
+      { requestId, interrupt },
+      600_000,
+    );
   }
 
   async transcribe(input: {

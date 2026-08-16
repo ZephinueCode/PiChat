@@ -14,6 +14,9 @@ import {
   type Component,
   type MarkdownTheme,
 } from "@earendil-works/pi-tui";
+import { splitMarkdownSegments } from "./markdown-segments.ts";
+
+export { splitMarkdownSegments } from "./markdown-segments.ts";
 
 type MessageType = "user" | "assistant" | "assistant-thinking";
 type BubbleSide = "left" | "right";
@@ -21,11 +24,8 @@ type BubbleSide = "left" | "right";
 interface RuntimeState {
   enabled: boolean;
   theme?: Theme;
-}
-
-interface MarkdownSegment {
-  kind: "chat" | "code";
-  text: string;
+  assistantTextHeld: boolean;
+  heldAssistantComponents: Set<AssistantComponentInternals>;
 }
 
 interface AssistantComponentInternals {
@@ -58,10 +58,12 @@ interface AssistantMessageLike {
   stopReason?: string;
 }
 
-const GLOBAL_STATE_KEY = "__pichatRuntimeStateV1";
+const GLOBAL_STATE_KEY = "__pichatRuntimeStateV2";
 const ORIGINAL_ASSISTANT_UPDATE = Symbol.for("pichat.original.assistant.updateContent");
 const ORIGINAL_USER_REBUILD = Symbol.for("pichat.original.user.rebuild");
 const ORIGINAL_USER_INVALIDATE = Symbol.for("pichat.original.user.invalidate");
+
+export const PICHAT_TYPING_WIDGET_KEY = "pichat-typing";
 
 const globalStore = globalThis as typeof globalThis & {
   [GLOBAL_STATE_KEY]?: RuntimeState;
@@ -69,7 +71,29 @@ const globalStore = globalThis as typeof globalThis & {
 
 export const runtimeState: RuntimeState = (globalStore[GLOBAL_STATE_KEY] ??= {
   enabled: true,
+  assistantTextHeld: false,
+  heldAssistantComponents: new Set(),
 });
+
+export function releaseAssistantText(): void {
+  runtimeState.assistantTextHeld = false;
+  const held = [...runtimeState.heldAssistantComponents];
+  runtimeState.heldAssistantComponents.clear();
+  const update = (AssistantMessageComponent.prototype as unknown as Record<
+    PropertyKey,
+    (...args: never[]) => unknown
+  >).updateContent;
+  if (typeof update !== "function") return;
+  for (const component of held) {
+    if (!component.lastMessage) continue;
+    update.call(component, component.lastMessage as never, component.isStreaming as never);
+  }
+}
+
+export function holdNextAssistantText(): void {
+  releaseAssistantText();
+  runtimeState.assistantTextHeld = true;
+}
 
 function markdownTransform(
   messageType: MessageType,
@@ -92,53 +116,6 @@ function markdownTransform(
     }
     return transformed;
   };
-}
-
-/** Split fenced code from conversational prose without changing model/session content. */
-export function splitMarkdownSegments(source: string): MarkdownSegment[] {
-  const segments: MarkdownSegment[] = [];
-  const prose: string[] = [];
-  const code: string[] = [];
-  let fenceCharacter: "`" | "~" | undefined;
-  let fenceLength = 0;
-
-  const flush = (kind: MarkdownSegment["kind"], lines: string[]) => {
-    const text = lines.join("\n").trim();
-    if (text) segments.push({ kind, text });
-    lines.length = 0;
-  };
-
-  for (const line of source.split("\n")) {
-    if (!fenceCharacter) {
-      const opening = line.match(/^ {0,3}(`{3,}|~{3,})/);
-      if (!opening) {
-        prose.push(line);
-        continue;
-      }
-      flush("chat", prose);
-      const marker = opening[1]!;
-      fenceCharacter = marker[0] as "`" | "~";
-      fenceLength = marker.length;
-      code.push(line);
-      continue;
-    }
-
-    code.push(line);
-    const closing = line.match(/^ {0,3}(`{3,}|~{3,})\s*$/);
-    if (
-      closing &&
-      closing[1]![0] === fenceCharacter &&
-      closing[1]!.length >= fenceLength
-    ) {
-      flush("code", code);
-      fenceCharacter = undefined;
-      fenceLength = 0;
-    }
-  }
-
-  if (code.length) flush("code", code);
-  flush("chat", prose);
-  return segments;
 }
 
 class ChatBubble implements Component {
@@ -308,10 +285,16 @@ function patchAssistantComponent(): void {
     this.lastMessage = message;
     this.isStreaming = isStreaming;
     this.contentContainer.clear();
+    if (runtimeState.assistantTextHeld && isStreaming) {
+      runtimeState.heldAssistantComponents.add(this);
+    }
+    const hideText =
+      runtimeState.assistantTextHeld &&
+      runtimeState.heldAssistantComponents.has(this);
     let hasContent = false;
 
     for (const content of message.content) {
-      if (content.type === "text" && content.text.trim()) {
+      if (!hideText && content.type === "text" && content.text.trim()) {
         hasContent = addTextSegments(
           this.contentContainer,
           content.text.trim(),

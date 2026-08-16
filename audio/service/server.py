@@ -94,6 +94,23 @@ class AudioApplication:
             "outputPath": str(output.resolve()),
         }
 
+    def play_generated(self, payload: dict[str, Any]) -> dict[str, Any]:
+        request_id = str(payload.get("requestId", "")).strip()
+        if not re.fullmatch(r"[a-f0-9]{32}", request_id):
+            raise ValueError("requestId must identify generated PiChat audio")
+        source = Path(self.config["storage"]["generated"]) / f"{request_id}.wav"
+        if not source.is_file():
+            raise FileNotFoundError(f"Generated audio not found: {request_id}")
+        if payload.get("interrupt", True):
+            self.playback.stop()
+        audio, sample_rate = sf.read(str(source), dtype="float32", always_2d=False)
+        self.playback.play(audio, sample_rate)
+        return {
+            "requestId": request_id,
+            "durationMs": round(len(audio) / sample_rate * 1000),
+            "played": True,
+        }
+
     def transcribe(self, payload: dict[str, Any]) -> dict[str, Any]:
         source_value = str(payload.get("source", "")).strip()
         if not source_value:
@@ -124,7 +141,7 @@ class AudioApplication:
 class Handler(BaseHTTPRequestHandler):
     app: AudioApplication
     token: str
-    server_version = "PiChatAudio/0.2"
+    server_version = "PiChatAudio/0.2.1"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write(f"[audio] {self.address_string()} {fmt % args}\n")
@@ -196,6 +213,8 @@ class Handler(BaseHTTPRequestHandler):
             self._run(self.app.recordings.start)
         elif self.path == "/v1/playback/stop":
             self._run(lambda: (self.app.playback.stop() or {"stopped": True}))
+        elif self.path == "/v1/playback/generated":
+            self._run(lambda: self.app.play_generated(self._payload()))
         elif self.path == "/shutdown":
             self._json(HTTPStatus.OK, {"shuttingDown": True})
             threading.Thread(target=self.app.shutdown, name="shutdown", daemon=True).start()

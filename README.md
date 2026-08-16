@@ -9,7 +9,8 @@ PiChat is a local Pi package that makes interactive Pi sessions read like a priv
 - Reasoning text is not rendered in the transcript. During generation, the working row says `Pi Agent is typing…`.
 - Fenced code blocks stay outside chat bubbles and use Pi's native Markdown/code renderer.
 - Tool calls and tool results remain in Pi's native tool components, including collapse/expand behavior.
-- Optional TTS reads the assistant's final conversational prose, excluding thinking, tool output, fenced code, URLs, and logs.
+- Optional TTS keeps the in-progress reply behind the typing indicator, reveals the complete message when speech synthesis finishes, and then starts playback.
+- TTS reads only conversational prose. Thinking, tool calls/results, fenced and inline code, code-like lines, URLs, paths, logs, tables, math, emoji, and decorative symbols are excluded.
 - Optional microphone input uses silence detection and local FunASR transcription.
 - The editor, footer, abort keys, model controls, session storage, and LLM context are unchanged.
 
@@ -111,7 +112,7 @@ The model can call two reusable tools:
 - `tts_speak` synthesizes an explicit utterance and optionally plays it.
 - `asr_transcribe` transcribes an existing audio file; it never opens the microphone.
 
-Automatic per-reply TTS is handled by Pi lifecycle events rather than relying on the model to call a tool. The extension waits for `agent_settled`, generates one complete utterance, waits for playback, and only then advances the call loop.
+Automatic per-reply TTS is handled by Pi lifecycle events rather than relying on the model to call a tool. While TTS is enabled, the extension holds back streamed assistant prose, waits for `agent_settled`, generates one complete utterance, reveals the full reply, starts playback, and only advances the call loop after playback finishes. Tool rendering remains native and is never folded into the held text bubble or speech input.
 
 Local settings live in `audio/config.local.json`. The committed example is [`audio/config.example.json`](audio/config.example.json). Relevant options include TTS/ASR device selection (`auto`, `cuda`, or `cpu`), microphone/output device IDs, VAD timing, and named voice profiles. A profile may use the shared CustomVoice model and a built-in speaker, override `model` with another local checkpoint, or use `mode: "voiceClone"` with `refAudio`/`refText`. Switching profiles unloads the previous TTS checkpoint so only one is resident. Persona skills should refer only to a profile name; model paths, devices, reference recordings, and service details stay in this package.
 

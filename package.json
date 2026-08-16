@@ -1,6 +1,6 @@
 {
   "name": "pichat",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "description": "A private-chat TUI for Pi with optional local TTS and ASR.",
@@ -19,6 +19,9 @@
     "themes": [
       "./themes/pichat-dark.json"
     ]
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test tests/speech-text.test.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

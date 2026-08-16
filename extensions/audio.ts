@@ -5,7 +5,13 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { AudioServiceClient, type RecordingStatus } from "./audio-client.ts";
-import { runtimeState, splitMarkdownSegments } from "./chat-layout.ts";
+import {
+  holdNextAssistantText,
+  PICHAT_TYPING_WIDGET_KEY,
+  releaseAssistantText,
+  runtimeState,
+} from "./chat-layout.ts";
+import { sanitizeSpeechText, speechText } from "./speech-text.ts";
 
 const AUDIO_STATUS_KEY = "pichat-audio";
 
@@ -20,14 +26,6 @@ interface AudioRuntime {
   sessionActive: boolean;
 }
 
-interface AssistantMessageLike {
-  role: string;
-  content?: Array<
-    | { type: "text"; text: string }
-    | { type: string; [key: string]: unknown }
-  >;
-}
-
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -38,26 +36,6 @@ function toolError(message: string) {
     details: { error: message },
     isError: true,
   };
-}
-
-function speechText(message: AssistantMessageLike): string {
-  if (message.role !== "assistant" || !Array.isArray(message.content)) return "";
-  const prose = message.content
-    .filter((item): item is { type: "text"; text: string } =>
-      item.type === "text" && typeof item.text === "string")
-    .flatMap((item) => splitMarkdownSegments(item.text))
-    .filter((segment) => segment.kind === "chat")
-    .map((segment) => segment.text)
-    .join("\n")
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-    .replace(/https?:\/\/\S+/g, "")
-    .replace(/`[^`\n]+`/g, "")
-    .replace(/^\s{0,3}(?:#{1,6}|[-*+] |>+)\s*/gm, "")
-    .replace(/\*\*|__|~~/g, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-  return prose;
 }
 
 function wait(ms: number): Promise<void> {
@@ -89,6 +67,16 @@ export function installAudioExtension(pi: ExtensionAPI): AudioController {
       ctx.ui.notify(message, type);
     } catch {
       // Session teardown can race a final agent_settled callback.
+    }
+  };
+
+  const revealAssistant = (ctx?: ExtensionContext): void => {
+    releaseAssistantText();
+    if (ctx?.mode !== "tui") return;
+    try {
+      ctx.ui.setWidget(PICHAT_TYPING_WIDGET_KEY, undefined);
+    } catch {
+      // Session teardown can remove the TUI while synthesis is finishing.
     }
   };
 
@@ -124,6 +112,7 @@ export function installAudioExtension(pi: ExtensionAPI): AudioController {
   const cancelAudio = async (ctx: ExtensionContext, unloadTts: boolean): Promise<void> => {
     state.generation += 1;
     state.callEnabled = false;
+    revealAssistant(ctx);
     const recordingId = state.activeRecordingId;
     state.activeRecordingId = undefined;
     state.mic = "idle";
@@ -289,11 +278,13 @@ export function installAudioExtension(pi: ExtensionAPI): AudioController {
     async execute(_id, params, _signal, _onUpdate, ctx) {
       if (!runtimeState.enabled) return toolError("tts_speak is unavailable because PiChat is disabled.");
       try {
+        const text = sanitizeSpeechText(params.text);
+        if (!text) return toolError("TTS found no speakable prose after removing code, markup, and symbols.");
         if (!state.ttsLoaded) {
           await client.loadTts();
           state.ttsLoaded = true;
         }
-        const result = await client.speak(params);
+        const result = await client.speak({ ...params, text });
         return {
           content: [{ type: "text", text: `Speech synthesized${result.played ? " and played" : ""} (${result.durationMs} ms, profile ${result.profile}).` }],
           details: result,
@@ -334,15 +325,21 @@ export function installAudioExtension(pi: ExtensionAPI): AudioController {
 
   pi.on("agent_start", () => {
     state.pendingAssistantText = undefined;
+    if (state.sessionActive && runtimeState.enabled && state.ttsEnabled) {
+      holdNextAssistantText();
+    } else {
+      releaseAssistantText();
+    }
   });
 
   pi.on("session_start", () => {
     state.sessionActive = true;
+    releaseAssistantText();
   });
 
   pi.on("message_end", (event) => {
     if (!runtimeState.enabled) return;
-    const text = speechText(event.message as AssistantMessageLike);
+    const text = speechText(event.message);
     if (text) state.pendingAssistantText = text;
   });
 
@@ -354,7 +351,12 @@ export function installAudioExtension(pi: ExtensionAPI): AudioController {
     try {
       if (text) {
         safeNotify(ctx, "Generating speech…");
-        await client.speak({ text, play: true, interrupt: true });
+        const result = await client.speak({ text, play: false, interrupt: true });
+        if (cycle !== state.generation || !state.ttsEnabled) return;
+        revealAssistant(ctx);
+        await client.playGenerated(result.requestId, true);
+      } else {
+        revealAssistant(ctx);
       }
       if (cycle === state.generation && state.callEnabled && ctx.mode === "tui") {
         await startRecording(ctx as ExtensionCommandContext, true);
@@ -366,6 +368,8 @@ export function installAudioExtension(pi: ExtensionAPI): AudioController {
         state.callEnabled = false;
         updateStatus(ctx);
       }
+    } finally {
+      revealAssistant(ctx);
     }
   });
 

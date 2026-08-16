@@ -6,13 +6,13 @@ import {
 import type { Component } from "@earendil-works/pi-tui";
 import {
   installChatLayoutPatch,
+  PICHAT_TYPING_WIDGET_KEY,
   runtimeState,
 } from "./chat-layout.ts";
 import { installAudioExtension } from "./audio.ts";
 
 const THEME_NAME = "pichat-dark";
 const STATUS_KEY = "pichat";
-const TYPING_WIDGET_KEY = "pichat-typing";
 
 class ChatHeader implements Component {
   constructor(private readonly theme: Theme) {}
@@ -66,7 +66,7 @@ function disableChatUi(ctx: ExtensionContext): void {
   ctx.ui.setHiddenThinkingLabel();
   ctx.ui.setHeader(undefined);
   ctx.ui.setStatus(STATUS_KEY, undefined);
-  ctx.ui.setWidget(TYPING_WIDGET_KEY, undefined);
+  ctx.ui.setWidget(PICHAT_TYPING_WIDGET_KEY, undefined);
   ctx.ui.setTitle("pi");
   ctx.ui.setTheme(ctx.ui.theme);
 }
@@ -74,7 +74,7 @@ function disableChatUi(ctx: ExtensionContext): void {
 function showTyping(ctx: ExtensionContext): void {
   if (ctx.mode !== "tui" || !runtimeState.enabled) return;
   ctx.ui.setWidget(
-    TYPING_WIDGET_KEY,
+    PICHAT_TYPING_WIDGET_KEY,
     [ctx.ui.theme.fg("dim", "  Pi Agent is typing…")],
     { placement: "aboveEditor" },
   );
@@ -82,7 +82,7 @@ function showTyping(ctx: ExtensionContext): void {
 
 function hideTyping(ctx: ExtensionContext): void {
   if (ctx.mode !== "tui") return;
-  ctx.ui.setWidget(TYPING_WIDGET_KEY, undefined);
+  ctx.ui.setWidget(PICHAT_TYPING_WIDGET_KEY, undefined);
 }
 
 export default function pichatExtension(pi: ExtensionAPI): void {
