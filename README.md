@@ -12,6 +12,7 @@ PiChat is a local Pi package that makes interactive Pi sessions read like a priv
 - Optional TTS keeps the in-progress reply behind the typing indicator, reveals the complete message when speech synthesis finishes, and then starts playback.
 - TTS reads only conversational prose. Thinking, tool calls/results, fenced and inline code, code-like lines, URLs, paths, logs, tables, math, emoji, and decorative symbols are excluded.
 - Optional microphone input uses silence detection and local FunASR transcription.
+- On wide terminals, PiChat shows a WeChat-like list of saved chats for the current directory. `/chat` focuses that existing sidebar: use ↑/↓ to select a chat, Enter to resume it, and Escape to return to the editor.
 - The editor, footer, abort keys, model controls, session storage, and LLM context are unchanged.
 
 The presentation layer does not rewrite user messages, assistant messages, tool results, or saved session content. Voice-call transcripts are ordinary user messages and therefore are saved in the session just like typed messages.
@@ -58,6 +59,25 @@ Inside Pi:
 /pichat off
 /pichat on
 ```
+
+Saved chats and context switching:
+
+```text
+/chat                  Focus the saved-chat list in the left sidebar
+↑/↓, Home/End          Move the sidebar selection
+Enter                  Resume the selected chat and its complete context
+Escape                 Return keyboard control to the editor
+/chat new              Start a new chat context
+/chat list             Toggle the saved-chat sidebar
+/chat show|hide        Show or hide the sidebar
+/chat next|prev        Resume the next or previous saved chat
+/chat <name-or-id>     Resume one uniquely matching saved chat
+/chat refresh          Reload saved sessions from disk
+```
+
+Each row shows the saved chat title, last-modified time, stored model, and message count. Resuming uses Pi's native session-switch operation, so the transcript, LLM context, model, thinking level, session metadata, and subsequent saved messages all move together. Use Pi's native `/model` command when you only want to change the model inside the current chat.
+
+The chat list is a root-layout column, not an overlay: it uses roughly the left one-fifth of a wide terminal while Pi's complete native workspace uses the remaining four-fifths. Messages, tool calls, code, status rows, the editor, and the footer all receive the right column's real width, so the sidebar cannot cover them. It automatically falls back to Pi's original single-column layout below 90 columns. `/chat` does not create a modal; it temporarily routes navigation keys to the existing sidebar and then returns control to the native editor.
 
 ### Optional local audio setup
 

@@ -6,14 +6,28 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   Container,
+  HStack,
   Markdown,
   Spacer,
   Text,
+  TuiAltScreen,
+  TuiMainScreen,
+  compositeTuiLine,
+  isViewportTUI,
+  sliceByColumn,
   truncateToWidth,
   visibleWidth,
   type Component,
   type MarkdownTheme,
+  type TUI,
 } from "@earendil-works/pi-tui";
+import {
+  CHAT_MIN_WIDTH,
+  FRIENDS_MIN_TERMINAL_WIDTH,
+  FRIENDS_MIN_WIDTH,
+  getFriendsLayoutWidths,
+  getFriendsViewportStart,
+} from "./friends-layout.ts";
 import { splitMarkdownSegments } from "./markdown-segments.ts";
 
 export { splitMarkdownSegments } from "./markdown-segments.ts";
@@ -26,6 +40,9 @@ interface RuntimeState {
   theme?: Theme;
   assistantTextHeld: boolean;
   heldAssistantComponents: Set<AssistantComponentInternals>;
+  friendsVisible: boolean;
+  friendsPane?: Component;
+  layoutTui?: TUI;
 }
 
 interface AssistantComponentInternals {
@@ -62,6 +79,10 @@ const GLOBAL_STATE_KEY = "__pichatRuntimeStateV2";
 const ORIGINAL_ASSISTANT_UPDATE = Symbol.for("pichat.original.assistant.updateContent");
 const ORIGINAL_USER_REBUILD = Symbol.for("pichat.original.user.rebuild");
 const ORIGINAL_USER_INVALIDATE = Symbol.for("pichat.original.user.invalidate");
+const ORIGINAL_MAIN_RENDER = Symbol.for("pichat.original.tui-main-screen.render");
+const ORIGINAL_ALT_SET_LAYOUT_ROOT = Symbol.for("pichat.original.tui-alt-screen.setLayoutRoot");
+const FRIENDS_SPLIT_ROOT_PROPERTY = "__pichatFriendsSplitRoot" as const;
+const LAYOUT_CAPTURE_WIDGET_KEY = "pichat-friends-layout-capture";
 
 export const PICHAT_TYPING_WIDGET_KEY = "pichat-typing";
 
@@ -73,7 +94,220 @@ export const runtimeState: RuntimeState = (globalStore[GLOBAL_STATE_KEY] ??= {
   enabled: true,
   assistantTextHeld: false,
   heldAssistantComponents: new Set(),
+  friendsVisible: true,
 });
+
+// Older in-process runtimes may not have the model-friends fields after /reload.
+if (typeof runtimeState.friendsVisible !== "boolean") runtimeState.friendsVisible = true;
+
+type RenderFunction = (this: TUI, width: number) => string[];
+type SetLayoutRootFunction = (this: TuiAltScreen, component: Component | undefined) => void;
+
+interface SplitRootComponent extends Component {
+  [FRIENDS_SPLIT_ROOT_PROPERTY]: true;
+  nativeRoot: Component;
+}
+
+class EmptyLayoutCapture implements Component {
+  render(): string[] {
+    return [];
+  }
+
+  invalidate(): void {}
+}
+
+function friendsPaneEnabled(width: number): boolean {
+  return Boolean(
+    runtimeState.enabled &&
+      runtimeState.friendsVisible &&
+      runtimeState.friendsPane &&
+      width >= FRIENDS_MIN_TERMINAL_WIDTH,
+  );
+}
+
+function paintPaneLine(source: string, width: number): string {
+  const safeWidth = Math.max(1, width);
+  const contentWidth = Math.max(0, safeWidth - 1);
+  const clipped = visibleWidth(source) > contentWidth
+    ? sliceByColumn(source, 0, contentWidth, true)
+    : source;
+  const plainPadding = " ".repeat(Math.max(0, contentWidth - visibleWidth(clipped)));
+  const theme = runtimeState.theme;
+  const padding = theme
+    ? theme.bg("customMessageBg", plainPadding)
+    : plainPadding;
+  const divider = safeWidth > 1
+    ? theme?.fg("borderMuted", "│") ?? "│"
+    : "";
+  return `${clipped}${padding}${divider}`;
+}
+
+class FriendsPaneSlot implements Component {
+  constructor(private readonly tui: TUI) {}
+
+  render(width: number): string[] {
+    const safeWidth = Math.max(1, width);
+    const contentWidth = Math.max(1, safeWidth - 1);
+    const height = Math.max(1, this.tui.terminal.rows);
+    const content = runtimeState.friendsPane?.render(contentWidth) ?? [];
+    return Array.from({ length: height }, (_, index) =>
+      paintPaneLine(content[index] ?? "", safeWidth),
+    );
+  }
+
+  invalidate(): void {
+    runtimeState.friendsPane?.invalidate();
+  }
+}
+
+class FriendsSplitRoot extends HStack implements SplitRootComponent {
+  readonly [FRIENDS_SPLIT_ROOT_PROPERTY] = true as const;
+
+  constructor(
+    tui: TUI,
+    readonly nativeRoot: Component,
+  ) {
+    super(
+      [
+        {
+          component: new FriendsPaneSlot(tui),
+          basis: 0,
+          grow: 1,
+          shrink: 1,
+          minSize: FRIENDS_MIN_WIDTH,
+          visible: (viewport) => friendsPaneEnabled(viewport.width),
+        },
+        {
+          component: nativeRoot,
+          basis: 0,
+          grow: 4,
+          shrink: 1,
+          minSize: CHAT_MIN_WIDTH,
+        },
+      ],
+      { gap: 0, align: "stretch" },
+    );
+  }
+}
+
+function isFriendsSplitRoot(component: Component | undefined): component is SplitRootComponent {
+  return Boolean(
+    component &&
+      (component as Partial<SplitRootComponent>)[FRIENDS_SPLIT_ROOT_PROPERTY] === true,
+  );
+}
+
+function wrapFullscreenRoot(tui: TuiAltScreen, component: Component): Component {
+  if (isFriendsSplitRoot(component)) return component;
+  return new FriendsSplitRoot(tui, component);
+}
+
+function renderRegularSplit(
+  tui: TUI,
+  width: number,
+  renderNative: RenderFunction,
+): string[] {
+  const layout = getFriendsLayoutWidths(width, friendsPaneEnabled(width));
+  if (!layout.visible) return renderNative.call(tui, width);
+
+  const chatLines = renderNative.call(tui, layout.chat);
+  if (chatLines.length === 0) return chatLines;
+
+  const paneLines = new FriendsPaneSlot(tui).render(layout.friends);
+  const viewportStart = getFriendsViewportStart(chatLines.length, tui.terminal.rows);
+  const blank = " ".repeat(layout.friends);
+
+  return chatLines.map((line, index) => {
+    const paneIndex = index - viewportStart;
+    const paneLine = paneIndex >= 0 && paneIndex < paneLines.length
+      ? paneLines[paneIndex]!
+      : blank;
+    return compositeTuiLine(
+      paneLine,
+      line,
+      layout.friends,
+      layout.chat,
+      width,
+    );
+  });
+}
+
+function patchRootLayout(): void {
+  const mainPrototype = TuiMainScreen.prototype as unknown as Record<
+    PropertyKey,
+    RenderFunction
+  >;
+  if (!mainPrototype[ORIGINAL_MAIN_RENDER]) {
+    mainPrototype[ORIGINAL_MAIN_RENDER] = mainPrototype.render;
+  }
+  mainPrototype.render = function (this: TUI, width: number): string[] {
+    return renderRegularSplit(
+      this,
+      width,
+      mainPrototype[ORIGINAL_MAIN_RENDER]!,
+    );
+  };
+
+  const altPrototype = TuiAltScreen.prototype as unknown as Record<
+    PropertyKey,
+    SetLayoutRootFunction
+  >;
+  if (!altPrototype[ORIGINAL_ALT_SET_LAYOUT_ROOT]) {
+    altPrototype[ORIGINAL_ALT_SET_LAYOUT_ROOT] = altPrototype.setLayoutRoot;
+  }
+  altPrototype.setLayoutRoot = function (
+    this: TuiAltScreen,
+    component: Component | undefined,
+  ): void {
+    const nativeRoot = isFriendsSplitRoot(component) ? component.nativeRoot : component;
+    altPrototype[ORIGINAL_ALT_SET_LAYOUT_ROOT]!.call(
+      this,
+      nativeRoot ? wrapFullscreenRoot(this, nativeRoot) : undefined,
+    );
+  };
+}
+
+function attachCurrentTui(tui: TUI): void {
+  runtimeState.layoutTui = tui;
+  if (isViewportTUI(tui)) {
+    const current = (tui as unknown as { layoutRoot?: Component }).layoutRoot;
+    if (current) tui.setLayoutRoot(current);
+  }
+  tui.requestRender(true);
+}
+
+/** Capture Pi's current renderer without leaving a widget or taking keyboard focus. */
+export function attachFriendsLayout(ctx: {
+  mode: string;
+  ui: {
+    setWidget(
+      key: string,
+      content:
+        | ((tui: TUI) => Component)
+        | undefined,
+      options?: { placement?: "aboveEditor" | "belowEditor" },
+    ): void;
+  };
+}): void {
+  if (ctx.mode !== "tui") return;
+  ctx.ui.setWidget(
+    LAYOUT_CAPTURE_WIDGET_KEY,
+    (tui) => {
+      attachCurrentTui(tui);
+      return new EmptyLayoutCapture();
+    },
+    { placement: "aboveEditor" },
+  );
+  ctx.ui.setWidget(LAYOUT_CAPTURE_WIDGET_KEY, undefined);
+}
+
+export function refreshFriendsLayout(): void {
+  try {
+    runtimeState.layoutTui?.requestRender(true);
+  } catch {
+    // The renderer may already have stopped during shutdown or a TUI mode switch.
+  }
+}
 
 export function releaseAssistantText(): void {
   runtimeState.assistantTextHeld = false;
@@ -392,6 +626,7 @@ function patchUserComponent(): void {
 }
 
 export function installChatLayoutPatch(): void {
+  patchRootLayout();
   patchAssistantComponent();
   patchUserComponent();
 }

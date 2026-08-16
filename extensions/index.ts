@@ -10,6 +10,7 @@ import {
   runtimeState,
 } from "./chat-layout.ts";
 import { installAudioExtension } from "./audio.ts";
+import { installModelFriends } from "./model-friends.ts";
 import { installVoiceTrainingExtension } from "./voice-training.ts";
 
 const THEME_NAME = "pichat-dark";
@@ -89,10 +90,12 @@ function hideTyping(ctx: ExtensionContext): void {
 export default function pichatExtension(pi: ExtensionAPI): void {
   installChatLayoutPatch();
   const audio = installAudioExtension(pi);
+  const friends = installModelFriends(pi);
   installVoiceTrainingExtension(pi);
 
   pi.on("session_start", (_event, ctx) => {
     configureChatUi(ctx);
+    friends.sync(ctx);
   });
 
   pi.on("agent_start", (_event, ctx) => {
@@ -105,6 +108,7 @@ export default function pichatExtension(pi: ExtensionAPI): void {
 
   pi.on("session_shutdown", async (_event, ctx) => {
     hideTyping(ctx);
+    friends.shutdown(ctx);
     await audio.shutdown(ctx);
   });
 
@@ -114,12 +118,14 @@ export default function pichatExtension(pi: ExtensionAPI): void {
       const mode = args.trim().toLowerCase();
       if (mode === "off") {
         disableChatUi(ctx);
+        friends.hide(ctx);
         await audio.disable(ctx);
         ctx.ui.notify("PiChat UI is disabled for this process. It will be enabled again after restarting Pi.", "info");
         return;
       }
       if (mode === "on") {
         configureChatUi(ctx);
+        friends.sync(ctx);
         ctx.ui.notify("PiChat UI is enabled.", "info");
         return;
       }
