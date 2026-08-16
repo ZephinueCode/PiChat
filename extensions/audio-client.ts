@@ -12,6 +12,21 @@ export interface ServiceStatus {
   recording?: { id: string; state: string };
 }
 
+export interface VoiceInfo {
+  id: string;
+  displayName: string;
+  mode: string;
+  language: string;
+  isDefault: boolean;
+  available: boolean;
+  source: "config" | "manifest";
+}
+
+export interface VoicesResult {
+  defaultVoice: string;
+  voices: VoiceInfo[];
+}
+
 export interface SpeechResult {
   requestId: string;
   durationMs: number;
@@ -164,9 +179,14 @@ export class AudioServiceClient {
     return this.request("GET", "/v1/status");
   }
 
-  async loadTts(): Promise<ServiceStatus> {
+  async voices(): Promise<VoicesResult> {
     await this.ensureStarted();
-    return this.request("POST", "/v1/tts/load", {}, 300_000);
+    return this.request("GET", "/v1/voices");
+  }
+
+  async loadTts(profile?: string): Promise<ServiceStatus> {
+    await this.ensureStarted();
+    return this.request("POST", "/v1/tts/load", profile ? { profile } : {}, 300_000);
   }
 
   async unloadTts(): Promise<ServiceStatus> {

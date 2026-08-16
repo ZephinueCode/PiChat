@@ -13,6 +13,7 @@ Options:
   --cpu-only             Install the CPU build of PyTorch even when an NVIDIA GPU is available.
   --skip-models          Install dependencies without downloading model weights.
   --skip-system-packages Do not install PortAudio or Python build packages with the system package manager.
+  --training             Install training utilities and download the Base model and 12Hz tokenizer.
   -h, --help             Show this help message.
 
 Environment:
@@ -23,6 +24,7 @@ EOF
 CPU_ONLY=false
 SKIP_MODELS=false
 SKIP_SYSTEM_PACKAGES=false
+TRAINING=false
 
 while (($#)); do
   case "$1" in
@@ -34,6 +36,9 @@ while (($#)); do
       ;;
     --skip-system-packages)
       SKIP_SYSTEM_PACKAGES=true
+      ;;
+    --training)
+      TRAINING=true
       ;;
     -h|--help)
       show_help
@@ -150,6 +155,9 @@ else
 fi
 
 "$VENV_PYTHON" -m pip install -r "$AUDIO_ROOT/requirements.txt" -i "$PIP_MIRROR"
+if $TRAINING; then
+  "$VENV_PYTHON" -m pip install -r "$AUDIO_ROOT/training/requirements.txt" -i "$PIP_MIRROR"
+fi
 
 if [[ ! -f "$AUDIO_ROOT/config.local.json" ]]; then
   cp -- "$AUDIO_ROOT/config.example.json" "$AUDIO_ROOT/config.local.json"
@@ -161,8 +169,16 @@ if ! $SKIP_MODELS; then
     --local_dir "$AUDIO_ROOT/models/Qwen3-TTS-12Hz-0.6B-CustomVoice"
   "$MODELSCOPE" download --model 'iic/SenseVoiceSmall' \
     --local_dir "$AUDIO_ROOT/models/SenseVoiceSmall"
+  if $TRAINING; then
+    "$MODELSCOPE" download --model 'Qwen/Qwen3-TTS-12Hz-0.6B-Base' \
+      --local_dir "$AUDIO_ROOT/models/Qwen3-TTS-12Hz-0.6B-Base"
+    "$MODELSCOPE" download --model 'Qwen/Qwen3-TTS-Tokenizer-12Hz' \
+      --local_dir "$AUDIO_ROOT/models/Qwen3-TTS-Tokenizer-12Hz"
+    "$MODELSCOPE" download --model 'iic/speech_campplus_sv_zh-cn_16k-common' \
+      --local_dir "$AUDIO_ROOT/models/CAMPPlus"
+  fi
 fi
 
 "$VENV_PYTHON" "$AUDIO_ROOT/doctor.py"
 
-printf 'PiChat audio setup is complete. Restart Pi or run /reload, then use /tts, /mic, or /call.\n'
+printf 'PiChat audio setup is complete. Restart Pi or run /reload, then use /tts, /mic, /call, or /voice.\n'

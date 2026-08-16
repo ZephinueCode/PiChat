@@ -95,26 +95,42 @@ PyTorch wheels are not published on standard PyPI mirrors, so PyTorch is the onl
 
 To install dependencies without downloading the model weights, use `-SkipModels` on Windows or `--skip-models` on Linux. Linux and Windows virtual environments cannot share the same `audio/.venv` directory.
 
+To also install the custom-voice training utilities and download the Qwen3-TTS Base/tokenizer weights, add `-Training` on Windows or `--training` on Linux. Training remains optional; normal PiChat installation and inference do not download these extra weights.
+
 Restart Pi or run `/reload`, then use:
 
 ```text
 /tts     Toggle automatic speech for assistant replies
 /mic     Start recording; silence or a second /mic stops it
 /call    Toggle a hands-free speech → reply → speech loop
+/voice   Select an installed local voice
 ```
 
 Outside call mode, `/mic` inserts the transcript into the editor so it can be reviewed before sending. In call mode, the transcript is sent immediately; after the assistant finishes and audio playback completes, recording starts again.
 
-`/tts`, `/mic`, `/call`, `tts_speak`, and `asr_transcribe` all refuse to operate after `/pichat off`. `/pichat off` also stops recording/playback, unloads TTS, and shuts down the localhost service.
+`/tts`, `/mic`, `/call`, `/voice`, `tts_speak`, `voice_select`, and `asr_transcribe` all refuse to operate after `/pichat off`. `/pichat off` also stops recording/playback, unloads TTS, and shuts down the localhost service.
 
-The model can call two reusable tools:
+The model can call three reusable tools:
 
 - `tts_speak` synthesizes an explicit utterance and optionally plays it.
+- `voice_select` selects an installed voice requested by an active persona skill.
 - `asr_transcribe` transcribes an existing audio file; it never opens the microphone.
 
 Automatic per-reply TTS is handled by Pi lifecycle events rather than relying on the model to call a tool. While TTS is enabled, the extension holds back streamed assistant prose, waits for `agent_settled`, generates one complete utterance, reveals the full reply, starts playback, and only advances the call loop after playback finishes. Tool rendering remains native and is never folded into the held text bubble or speech input.
 
-Local settings live in `audio/config.local.json`. The committed example is [`audio/config.example.json`](audio/config.example.json). Relevant options include TTS/ASR device selection (`auto`, `cuda`, or `cpu`), microphone/output device IDs, VAD timing, and named voice profiles. A profile may use the shared CustomVoice model and a built-in speaker, override `model` with another local checkpoint, or use `mode: "voiceClone"` with `refAudio`/`refText`. Switching profiles unloads the previous TTS checkpoint so only one is resident. Persona skills should refer only to a profile name; model paths, devices, reference recordings, and service details stay in this package.
+Local settings live in `audio/config.local.json`. The committed example is [`audio/config.example.json`](audio/config.example.json). Relevant options include TTS/ASR device selection (`auto`, `cuda`, or `cpu`), microphone/output device IDs, VAD timing, and named voice profiles. A profile may use the shared CustomVoice model and a built-in speaker, override `model` with another local checkpoint, or use `mode: "voiceClone"` with `refAudio`/`refText`. Switching profiles unloads the previous TTS checkpoint so only one is resident.
+
+`/voice` opens a selector in the TUI; `/voice list`, `/voice <id>`, and `/voice default` are also available. PiChat discovers private manifests at `audio/voices/private/*/voice.json`. A persona skill can request an installed voice by placing a `pichat.json` sidecar next to its `SKILL.md`:
+
+```json
+{
+  "voice": "speaker-id"
+}
+```
+
+Only the stable voice ID belongs in the skill. Model paths, devices, reference recordings, and service details stay in PiChat. Explicit `/skill:name` invocation and normal agent `SKILL.md` reads both activate the sidecar voice. Missing or broken skill voices fall back to the manually selected voice and then the configured default without blocking the text reply.
+
+To fine-tune and register a new Qwen3-TTS CustomVoice checkpoint, follow the local-only pipeline in [`audio/training/README.md`](audio/training/README.md). It includes a 12GB GPU preset, corrected causal/codebook loss alignment, fixed evaluation sentences, pace regression metrics, and private manifest registration.
 
 The audio service binds only to `127.0.0.1` and requires a random per-process bearer token. Environments, models, caches, generated audio, recordings, private profiles, and local configuration are excluded by `.gitignore`.
 

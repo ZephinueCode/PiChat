@@ -1,0 +1,4 @@
+accelerate>=1.12,<2
+modelscope>=1.39,<2
+safetensors>=0.7,<1
+scipy>=1.14,<2

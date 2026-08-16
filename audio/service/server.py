@@ -17,13 +17,13 @@ import soundfile as sf
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from service.config import load_config
+    from service.config import load_config, refresh_voice_profiles
     from service.playback import PlaybackManager
     from service.providers.funasr import FunASRProvider
     from service.providers.qwen_tts import QwenTTSProvider
     from service.recording import RecordingManager
 else:
-    from .config import load_config
+    from .config import load_config, refresh_voice_profiles
     from .playback import PlaybackManager
     from .providers.funasr import FunASRProvider
     from .providers.qwen_tts import QwenTTSProvider
@@ -55,9 +55,17 @@ class AudioApplication:
             "recording": recording,
         }
 
-    def load_tts(self) -> dict[str, Any]:
+    def voices(self) -> dict[str, Any]:
+        voices = refresh_voice_profiles(self.config)
+        return {
+            "defaultVoice": self.config["tts"].get("defaultProfile", "default"),
+            "voices": voices,
+        }
+
+    def load_tts(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        refresh_voice_profiles(self.config)
         with self.work_lock:
-            self.tts.load()
+            self.tts.load_profile((payload or {}).get("profile"))
         return self.status()
 
     def unload_tts(self) -> dict[str, Any]:
@@ -74,6 +82,7 @@ class AudioApplication:
             raise ValueError("text is too long (maximum 12,000 characters)")
         if payload.get("interrupt", True):
             self.playback.stop()
+        refresh_voice_profiles(self.config)
         with self.work_lock:
             audio, sample_rate, profile = self.tts.synthesize(
                 text=text,
@@ -141,7 +150,7 @@ class AudioApplication:
 class Handler(BaseHTTPRequestHandler):
     app: AudioApplication
     token: str
-    server_version = "PiChatAudio/0.2.1"
+    server_version = "PiChatAudio/0.3.0"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write(f"[audio] {self.address_string()} {fmt % args}\n")
@@ -191,6 +200,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/v1/status":
             self._run(self.app.status)
             return
+        if self.path == "/v1/voices":
+            self._run(self.app.voices)
+            return
         match = re.fullmatch(r"/v1/recordings/([a-f0-9]+)", self.path)
         if match:
             self._run(lambda: self.app.recordings.get(match.group(1)))
@@ -202,7 +214,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.UNAUTHORIZED, {"error": "Unauthorized"})
             return
         if self.path == "/v1/tts/load":
-            self._run(self.app.load_tts)
+            self._run(lambda: self.app.load_tts(self._payload()))
         elif self.path == "/v1/tts/unload":
             self._run(self.app.unload_tts)
         elif self.path == "/v1/audio/speech":

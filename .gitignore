@@ -6,6 +6,8 @@ audio/cache/
 audio/generated/
 audio/recordings/
 audio/voices/private/
+audio/datasets/private/
+audio/evaluations/private/
 audio/config.local.json
 
 __pycache__/

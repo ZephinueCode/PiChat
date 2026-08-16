@@ -1,10 +1,16 @@
 import { Type } from "@earendil-works/pi-ai";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { AudioServiceClient, type RecordingStatus } from "./audio-client.ts";
+import {
+  AudioServiceClient,
+  type RecordingStatus,
+  type VoiceInfo,
+} from "./audio-client.ts";
 import {
   holdNextAssistantText,
   PICHAT_TYPING_WIDGET_KEY,
@@ -24,6 +30,9 @@ interface AudioRuntime {
   pendingAssistantText?: string;
   generation: number;
   sessionActive: boolean;
+  manualVoice?: string;
+  skillVoice?: string;
+  activeSkillPath?: string;
 }
 
 function errorText(error: unknown): string {
@@ -57,6 +66,8 @@ export function installAudioExtension(pi: ExtensionAPI): AudioController {
     generation: 0,
     sessionActive: true,
   };
+
+  const activeVoice = (): string | undefined => state.skillVoice ?? state.manualVoice;
 
   const safeNotify = (
     ctx: ExtensionContext,
@@ -94,16 +105,117 @@ export function installAudioExtension(pi: ExtensionAPI): AudioController {
     }
     const parts = [
       state.ttsEnabled ? "TTS" : undefined,
+      state.ttsEnabled ? `VOICE:${activeVoice() ?? "default"}` : undefined,
       state.mic === "recording" ? "REC" : state.mic === "transcribing" ? "ASR" : undefined,
       state.callEnabled ? "CALL" : undefined,
     ].filter(Boolean);
     ctx.ui.setStatus(AUDIO_STATUS_KEY, ctx.ui.theme.fg("accent", `● ${parts.join(" · ")}`));
   };
 
+  const voiceList = async (): Promise<VoiceInfo[]> => {
+    const result = await client.voices();
+    return result.voices;
+  };
+
+  const clearFailedVoice = (voice: string): void => {
+    if (state.skillVoice === voice) state.skillVoice = undefined;
+    if (state.manualVoice === voice) state.manualVoice = undefined;
+  };
+
+  const loadActiveTts = async (ctx: ExtensionContext): Promise<void> => {
+    const candidates: Array<string | undefined> = [state.skillVoice, state.manualVoice, undefined];
+    const unique = candidates.filter(
+      (candidate, index) => candidates.findIndex((value) => value === candidate) === index,
+    );
+    let lastError: unknown;
+    for (const candidate of unique) {
+      try {
+        await client.loadTts(candidate);
+        state.ttsLoaded = true;
+        return;
+      } catch (error) {
+        lastError = error;
+        if (candidate) {
+          clearFailedVoice(candidate);
+          updateStatus(ctx);
+          safeNotify(
+            ctx,
+            `Voice '${candidate}' is unavailable; trying the fallback voice. ${errorText(error)}`,
+            "warning",
+          );
+        }
+      }
+    }
+    throw lastError ?? new Error("No TTS voice is available.");
+  };
+
+  const speakWithFallback = async (
+    input: {
+      text: string;
+      profile?: string;
+      language?: string;
+      play?: boolean;
+      interrupt?: boolean;
+    },
+    ctx: ExtensionContext,
+  ) => {
+    const requested = input.profile ?? activeVoice();
+    const candidates: Array<string | undefined> = [requested];
+    if (input.profile) candidates.push(activeVoice());
+    if (state.skillVoice) candidates.push(state.manualVoice);
+    candidates.push(undefined);
+    const unique = candidates.filter(
+      (candidate, index) => candidates.findIndex((value) => value === candidate) === index,
+    );
+    let lastError: unknown;
+    for (const candidate of unique) {
+      try {
+        return await client.speak({ ...input, profile: candidate });
+      } catch (error) {
+        lastError = error;
+        if (candidate) {
+          clearFailedVoice(candidate);
+          updateStatus(ctx);
+          safeNotify(
+            ctx,
+            `Voice '${candidate}' failed; trying the fallback voice. ${errorText(error)}`,
+            "warning",
+          );
+        }
+      }
+    }
+    throw lastError ?? new Error("No TTS voice is available.");
+  };
+
+  const skillVoiceFromPath = (skillFile: string): string | undefined => {
+    const configPath = path.join(path.dirname(skillFile), "pichat.json");
+    if (!existsSync(configPath)) return undefined;
+    try {
+      const value = JSON.parse(readFileSync(configPath, "utf8")) as { voice?: unknown };
+      const voice = typeof value.voice === "string" ? value.voice.trim() : "";
+      return voice || undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const activateSkillVoice = (
+    skillFile: string,
+    ctx: ExtensionContext,
+    clearWhenMissing = false,
+  ): void => {
+    const resolved = path.resolve(skillFile);
+    if (state.activeSkillPath === resolved) return;
+    const requestedVoice = skillVoiceFromPath(resolved);
+    if (!requestedVoice && !clearWhenMissing) return;
+    state.activeSkillPath = resolved;
+    state.skillVoice = requestedVoice;
+    updateStatus(ctx);
+  };
+
   const enableTts = async (ctx: ExtensionContext, notify = true): Promise<void> => {
-    if (notify) ctx.ui.notify("Starting Qwen3-TTS and loading the default voice…", "info");
-    await client.loadTts();
-    state.ttsLoaded = true;
+    if (notify) ctx.ui.notify("Starting Qwen3-TTS and loading the selected voice…", "info");
+    await loadActiveTts(ctx);
     state.ttsEnabled = true;
     updateStatus(ctx);
     if (notify) ctx.ui.notify("TTS is on.", "info");
@@ -262,6 +374,71 @@ export function installAudioExtension(pi: ExtensionAPI): AudioController {
     },
   });
 
+  pi.registerCommand("voice", {
+    description: "Choose the local voice used by PiChat TTS",
+    handler: async (rawArgs, ctx) => {
+      if (!requirePiChat(ctx)) return;
+      try {
+        const voices = await voiceList();
+        const available = voices.filter((voice) => voice.available);
+        const selectable = available.filter((voice) => !voice.isDefault);
+        const argument = rawArgs.trim().toLowerCase();
+        if (argument === "list") {
+          const lines = voices.map(
+            (voice) => `${voice.id}${voice.isDefault ? " (default)" : ""}${voice.available ? "" : " (unavailable)"}`,
+          );
+          ctx.ui.notify(lines.length ? lines.join("\n") : "No voices are configured.", "info");
+          return;
+        }
+
+        let selectedId: string | undefined;
+        if (argument) {
+          if (argument !== "default") {
+            const selected = voices.find((voice) => voice.id.toLowerCase() === argument);
+            if (!selected) {
+              ctx.ui.notify(`Unknown voice '${rawArgs.trim()}'. Run /voice list to see installed voices.`, "warning");
+              return;
+            }
+            if (!selected.available) {
+              ctx.ui.notify(`Voice '${selected.id}' has no available model.`, "warning");
+              return;
+            }
+            selectedId = selected.id;
+          }
+        } else if (ctx.mode === "tui") {
+          const defaultLabel = `Default${activeVoice() ? "" : " (current)"}`;
+          const labels = [
+            defaultLabel,
+            ...selectable.map((voice) =>
+              `${voice.displayName} [${voice.id}]${activeVoice() === voice.id ? " (current)" : ""}`,
+            ),
+          ];
+          const chosen = await ctx.ui.select("Select a PiChat voice", labels);
+          if (!chosen) return;
+          if (chosen !== defaultLabel) {
+            selectedId = selectable.find((voice) => chosen.includes(`[${voice.id}]`))?.id;
+          }
+        } else {
+          ctx.ui.notify("Usage: /voice <id|default|list>", "info");
+          return;
+        }
+
+        if (state.ttsEnabled) {
+          await client.loadTts(selectedId);
+          state.ttsLoaded = true;
+        }
+        state.manualVoice = selectedId;
+        state.skillVoice = undefined;
+        state.activeSkillPath = undefined;
+        updateStatus(ctx);
+        const selected = voices.find((voice) => voice.id === selectedId);
+        ctx.ui.notify(`Voice set to ${selected?.displayName ?? "the configured default"}.`, "info");
+      } catch (error) {
+        ctx.ui.notify(`Voice selection failed: ${errorText(error)}`, "error");
+      }
+    },
+  });
+
   pi.registerTool({
     name: "tts_speak",
     label: "TTS Speak",
@@ -281,10 +458,9 @@ export function installAudioExtension(pi: ExtensionAPI): AudioController {
         const text = sanitizeSpeechText(params.text);
         if (!text) return toolError("TTS found no speakable prose after removing code, markup, and symbols.");
         if (!state.ttsLoaded) {
-          await client.loadTts();
-          state.ttsLoaded = true;
+          await loadActiveTts(ctx);
         }
-        const result = await client.speak({ ...params, text });
+        const result = await speakWithFallback({ ...params, text }, ctx);
         return {
           content: [{ type: "text", text: `Speech synthesized${result.played ? " and played" : ""} (${result.durationMs} ms, profile ${result.profile}).` }],
           details: result,
@@ -295,6 +471,63 @@ export function installAudioExtension(pi: ExtensionAPI): AudioController {
         updateStatus(ctx);
       }
     },
+  });
+
+  pi.registerTool({
+    name: "voice_select",
+    label: "Select Voice",
+    description: "Select an installed PiChat voice by ID for the current persona. Use only when a skill explicitly requests a voice; use 'default' to clear it.",
+    promptSnippet: "Select a local PiChat voice requested by the active skill",
+    parameters: Type.Object({
+      voice: Type.String({ description: "Installed voice ID, or 'default'" }),
+    }),
+    executionMode: "sequential",
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      if (!runtimeState.enabled) return toolError("voice_select is unavailable because PiChat is disabled.");
+      const requested = params.voice.trim();
+      if (requested.toLowerCase() === "default") {
+        state.skillVoice = undefined;
+        state.activeSkillPath = undefined;
+        updateStatus(ctx);
+        return { content: [{ type: "text", text: "PiChat will use the manual/default voice." }], details: {} };
+      }
+      try {
+        const voices = await voiceList();
+        const voice = voices.find((item) => item.id.toLowerCase() === requested.toLowerCase());
+        if (!voice?.available) return toolError(`Voice '${requested}' is not installed or its model is unavailable.`);
+        if (state.ttsEnabled) {
+          await client.loadTts(voice.id);
+          state.ttsLoaded = true;
+        }
+        state.skillVoice = voice.id;
+        updateStatus(ctx);
+        return {
+          content: [{ type: "text", text: `PiChat voice selected: ${voice.displayName} (${voice.id}).` }],
+          details: { voice: voice.id },
+        };
+      } catch (error) {
+        return toolError(`Voice selection failed: ${errorText(error)}`);
+      }
+    },
+  });
+
+  pi.on("input", (event, ctx) => {
+    if (!runtimeState.enabled) return;
+    const match = event.text.match(/^\/skill:([^\s]+)/);
+    if (!match) return;
+    const command = pi.getCommands().find(
+      (item) => item.source === "skill" && item.name.replace(/:\d+$/, "") === `skill:${match[1]}`,
+    );
+    if (command?.sourceInfo.path) activateSkillVoice(command.sourceInfo.path, ctx, true);
+  });
+
+  pi.on("tool_execution_start", (event, ctx) => {
+    if (!runtimeState.enabled || event.toolName !== "read") return;
+    const args = event.args as Record<string, unknown>;
+    const requestedPath = typeof args.path === "string" ? args.path : undefined;
+    if (!requestedPath || path.basename(requestedPath).toLowerCase() !== "skill.md") return;
+    const skillFile = path.isAbsolute(requestedPath) ? requestedPath : path.resolve(ctx.cwd, requestedPath);
+    activateSkillVoice(skillFile, ctx);
   });
 
   pi.registerTool({
@@ -334,6 +567,8 @@ export function installAudioExtension(pi: ExtensionAPI): AudioController {
 
   pi.on("session_start", () => {
     state.sessionActive = true;
+    state.skillVoice = undefined;
+    state.activeSkillPath = undefined;
     releaseAssistantText();
   });
 
@@ -350,7 +585,7 @@ export function installAudioExtension(pi: ExtensionAPI): AudioController {
     const cycle = state.generation;
     try {
       if (text) {
-        const result = await client.speak({ text, play: false, interrupt: true });
+        const result = await speakWithFallback({ text, play: false, interrupt: true }, ctx);
         if (cycle !== state.generation || !state.ttsEnabled) return;
         revealAssistant(ctx);
         await client.playGenerated(result.requestId, true);

@@ -50,6 +50,16 @@ class QwenTTSProvider:
         )
         self.model_path = selected_model
 
+    def load_profile(self, profile_name: str | None = None) -> str:
+        profiles = self.config.get("profiles", {})
+        selected_name = profile_name or self.config.get("defaultProfile", "default")
+        profile = profiles.get(selected_name)
+        if profile is None:
+            available = ", ".join(sorted(profiles)) or "default"
+            raise ValueError(f"Unknown voice profile '{selected_name}'. Available profiles: {available}")
+        self.load(profile.get("model", self.config["model"]))
+        return selected_name
+
     def unload(self) -> None:
         if self.model is None:
             return
@@ -71,12 +81,8 @@ class QwenTTSProvider:
         language: str | None = None,
     ):
         profiles = self.config.get("profiles", {})
-        selected_name = profile_name or self.config.get("defaultProfile", "default")
-        profile = profiles.get(selected_name)
-        if profile is None:
-            available = ", ".join(sorted(profiles)) or "default"
-            raise ValueError(f"Unknown voice profile '{selected_name}'. Available profiles: {available}")
-        self.load(profile.get("model", self.config["model"]))
+        selected_name = self.load_profile(profile_name)
+        profile = profiles[selected_name]
         requested_language = language or profile.get("language", "Auto")
         normalized_language = LANGUAGES.get(str(requested_language).lower(), requested_language)
         mode = str(profile.get("mode", "customVoice")).lower()
