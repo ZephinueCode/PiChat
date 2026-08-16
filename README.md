@@ -25,10 +25,10 @@ The patch keeps tool rendering untouched and calls Pi's original component metho
 
 ## Install
 
-Install directly from GitHub after replacing `<owner>` with the repository owner:
+Install directly from GitHub:
 
 ```bash
-pi install https://github.com/<owner>/PiChat
+pi install https://github.com/ZephinueCode/PiChat
 ```
 
 For local development, install the checkout by path:
@@ -61,7 +61,7 @@ Use `/reload` after editing the extension. Restart Pi after changing global sett
 ## Remove
 
 ```bash
-pi remove https://github.com/<owner>/PiChat
+pi remove https://github.com/ZephinueCode/PiChat
 ```
 
 Then change `theme` back to `dark` and remove or disable `hideThinkingBlock` if desired.
