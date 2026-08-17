@@ -14,6 +14,7 @@ PiChat is a local Pi package that makes interactive Pi sessions read like a priv
 - Optional microphone input uses silence detection and local FunASR transcription.
 - On wide terminals, PiChat shows a WeChat-like list of saved chats for the current directory. `/chat` focuses that existing sidebar: use ↑/↓ to select a chat, Enter to resume it, and Escape to return to the editor.
 - `/repost N` queues recent conversational context, including tool calls and results in that range, for another saved chat selected directly in the sidebar. Unopened handoffs are marked with `(!)`.
+- `/delete` selects and deletes an inactive saved chat from the sidebar after an in-place `Y/n` confirmation.
 - The `share` tool lets an agent list saved chats, send a curated handoff only when the user requests it, and read large received evidence on demand.
 - The editor, footer, abort keys, model controls, session storage, and LLM context are unchanged.
 
@@ -95,6 +96,8 @@ Escape                Cancel and return to the editor
 `N` counts recent user/assistant messages with conversational text. Tool calls, tool results, and shell results inside the selected range are attached without consuming that count; thinking/reasoning and previously received handoffs are excluded. Handoffs are currently limited to saved sessions in the same working directory.
 
 PiChat uses a mailbox instead of modifying an inactive session file behind Pi's back. A queued target shows `(!)` in the chat list. Opening that chat imports the handoff as a distinct `Shared context` transcript block and clears the marker. Importing never starts the target model: the agent receives the shared context together with the user's next normal message. Press `Ctrl+O` to expand or collapse the displayed handoff.
+
+To remove an old chat, run `/delete`, select it with ↑/↓, and press Enter. The sidebar header changes to `Delete chat? Y/n`; press `Y` or Enter to confirm, or `N`/Escape to cancel. PiChat never offers the active chat as a deletion target. It follows Pi's native behavior by trying the system trash first and falling back to permanent file deletion when no trash command is available. Associated PiChat inbox/archive data for that receiving session is also cleared after a successful deletion.
 
 The agent-facing `share` tool supports three actions:
 

@@ -44,6 +44,7 @@ export interface HandoffSendResult {
 export interface AgentShareController {
   deliverPending(ctx: ExtensionContext): Promise<number>;
   unreadCount(sessionId: string): number;
+  discardSession(sessionId: string): void;
   repost(
     ctx: ExtensionContext,
     target: HandoffTarget,
@@ -300,6 +301,10 @@ export function installAgentShare(
 
     unreadCount(sessionId) {
       return store.unreadCount(sessionId);
+    },
+
+    discardSession(sessionId) {
+      store.discardSession(sessionId);
     },
 
     async repost(ctx, target, requestedMessages) {

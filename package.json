@@ -1,6 +1,6 @@
 {
   "name": "pichat",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "type": "module",
   "description": "A private-chat TUI for Pi with optional local TTS and ASR.",
@@ -24,7 +24,7 @@
     ]
   },
   "scripts": {
-    "test": "node --experimental-strip-types --test tests/friends-layout.test.ts tests/handoff-protocol.test.ts tests/handoff-store.test.ts tests/speech-text.test.ts tests/training-status.test.ts"
+    "test": "node --experimental-strip-types --test tests/friends-layout.test.ts tests/handoff-protocol.test.ts tests/handoff-store.test.ts tests/session-delete.test.ts tests/speech-text.test.ts tests/training-status.test.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

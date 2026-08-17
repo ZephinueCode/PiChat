@@ -140,4 +140,11 @@ export class HandoffStore {
     }
     renameSync(source, destination);
   }
+
+  discardSession(sessionId: string): void {
+    safeSegment(sessionId, "session ID");
+    for (const state of ["inbox", "archive"] as const) {
+      rmSync(this.sessionDir(state, sessionId), { recursive: true, force: true });
+    }
+  }
 }

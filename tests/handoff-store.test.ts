@@ -38,6 +38,8 @@ test("handoff store queues, counts, archives, and reads packets", () => {
     assert.equal(store.unreadCount("target"), 0);
     assert.equal(store.getForSession("target", "shr_one")?.packetId, "shr_one");
     store.markDelivered("target", "shr_one");
+    store.discardSession("target");
+    assert.equal(store.getForSession("target", "shr_one"), undefined);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -51,6 +53,7 @@ test("handoff store rejects unsafe path segments and duplicate packet IDs", () =
     store.queue(value);
     assert.throws(() => store.queue(value), /already exists/);
     assert.throws(() => store.unreadCount("../escape"), /Invalid session ID/);
+    assert.throws(() => store.discardSession("../escape"), /Invalid session ID/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

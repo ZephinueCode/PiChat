@@ -26,6 +26,10 @@ import type {
   AgentShareController,
   HandoffTarget,
 } from "./agent-share.ts";
+import {
+  deleteSessionFile,
+  resolveDeletableSessionPath,
+} from "./session-delete.ts";
 
 const CHAT_STATUS_KEY = "pichat-chat";
 const MAX_FALLBACK_VISIBLE_CHATS = 12;
@@ -43,7 +47,9 @@ interface ChatSession {
 
 type SidebarSelectionMode =
   | { kind: "chat" }
-  | { kind: "repost"; messageCount: number };
+  | { kind: "repost"; messageCount: number }
+  | { kind: "delete" }
+  | { kind: "delete-confirm"; chatId: string; chatTitle: string };
 
 export interface ModelFriendsController {
   sync(ctx: ExtensionContext): void;
@@ -187,7 +193,7 @@ class ChatListPane implements Component {
     if (this.chats.length === 0) return false;
     this.selectionMode = mode;
     const active = this.chats.findIndex((chat) => chat.active);
-    if (mode.kind === "repost") {
+    if (mode.kind === "repost" || mode.kind === "delete") {
       const firstTarget = this.chats.findIndex((chat) => !chat.active && Boolean(chat.path));
       if (firstTarget < 0) {
         this.selectionMode = undefined;
@@ -208,6 +214,14 @@ class ChatListPane implements Component {
 
   currentSelectionMode(): SidebarSelectionMode | undefined {
     return this.selectionMode;
+  }
+
+  confirmDelete(chat: ChatSession): void {
+    this.selectionMode = {
+      kind: "delete-confirm",
+      chatId: chat.id,
+      chatTitle: chat.title,
+    };
   }
 
   move(delta: 1 | -1, targetsOnly = false): void {
@@ -325,7 +339,11 @@ class ChatListPane implements Component {
     const count = this.loading ? "…" : `${this.chats.length}`;
     const title = this.selectionMode?.kind === "repost"
       ? ` Repost ${this.selectionMode.messageCount}`
-      : " Chats";
+      : this.selectionMode?.kind === "delete"
+        ? " Delete chat"
+        : this.selectionMode?.kind === "delete-confirm"
+          ? " Delete chat? Y/n"
+          : " Chats";
     const titleGap = " ".repeat(
       Math.max(1, w - visibleWidth(title) - visibleWidth(count) - 1),
     );
@@ -340,9 +358,13 @@ class ChatListPane implements Component {
           truncatePlainText(
             this.selectionMode?.kind === "repost"
               ? " ↑/↓ target · Enter send"
-              : this.selectionMode
-                ? " ↑/↓ select · Enter open"
-                : " /chat to select",
+              : this.selectionMode?.kind === "delete"
+                ? " ↑/↓ select · Enter delete"
+                : this.selectionMode?.kind === "delete-confirm"
+                  ? ` ${truncatePlainText(this.selectionMode.chatTitle, Math.max(3, w - 2))}`
+                  : this.selectionMode
+                    ? " ↑/↓ select · Enter open"
+                    : " /chat to select",
             w,
           ),
         ),
@@ -528,12 +550,51 @@ export function installModelFriends(
     }
   };
 
+  const deleteChat = async (
+    ctx: ExtensionCommandContext,
+    chat: ChatSession,
+  ): Promise<void> => {
+    try {
+      const sessions = await SessionManager.list(
+        ctx.sessionManager.getCwd(),
+        ctx.sessionManager.getSessionDir(),
+      );
+      const listed = sessions.find((info) => info.id === chat.id && samePath(info.path, chat.path));
+      const sessionPath = resolveDeletableSessionPath({
+        candidatePath: listed?.path,
+        currentPath: ctx.sessionManager.getSessionFile(),
+        listedPaths: sessions.map((info) => info.path),
+      });
+      const result = await deleteSessionFile(sessionPath);
+      let mailboxCleanupError: string | undefined;
+      try {
+        handoff.discardSession(chat.id);
+      } catch (error) {
+        mailboxCleanupError = errorText(error);
+      }
+      ctx.ui.notify(
+        result.method === "trash"
+          ? `Moved '${chat.title}' to trash.`
+          : `Deleted '${chat.title}'.`,
+        "info",
+      );
+      if (mailboxCleanupError) {
+        ctx.ui.notify(`The chat was deleted, but its PiChat mailbox could not be cleared: ${mailboxCleanupError}`, "warning");
+      }
+      await loadSessions(ctx);
+    } catch (error) {
+      ctx.ui.notify(`Delete failed: ${errorText(error)}`, "error");
+      await loadSessions(ctx);
+    }
+  };
+
   const beginSidebarSelection = (
     ctx: ExtensionCommandContext,
     mode: SidebarSelectionMode,
   ): void => {
     if (ctx.mode !== "tui") {
-      ctx.ui.notify(`/${mode.kind === "chat" ? "chat" : "repost"} is available in Pi's interactive TUI.`, "info");
+      const command = mode.kind === "chat" ? "chat" : mode.kind === "delete" ? "delete" : "repost";
+      ctx.ui.notify(`/${command} is available in Pi's interactive TUI.`, "info");
       return;
     }
     if (!runtimeState.enabled || !runtimeState.friendsVisible) {
@@ -551,8 +612,13 @@ export function installModelFriends(
     const target = ensurePane(ctx);
     if (target.isSelecting()) return;
     if (!target.beginSelection(mode)) {
+      const emptyMessage = mode.kind === "repost"
+        ? "No other saved chat is available as a repost target."
+        : mode.kind === "delete"
+          ? "No other saved chat is available to delete."
+          : "No saved chats are available yet.";
       ctx.ui.notify(
-        mode.kind === "repost" ? "No other saved chat is available as a repost target." : "No saved chats are available yet.",
+        emptyMessage,
         "info",
       );
       return;
@@ -560,7 +626,30 @@ export function installModelFriends(
 
     inputUnsubscribe = ctx.ui.onTerminalInput((data) => {
       if (!target.isSelecting()) return undefined;
-      const targetsOnly = target.currentSelectionMode()?.kind === "repost";
+      const mode = target.currentSelectionMode();
+      if (mode?.kind === "delete-confirm") {
+        if (
+          matchesKey(data, "y") ||
+          matchesKey(data, Key.shift("y")) ||
+          matchesKey(data, Key.enter)
+        ) {
+          const selected = target.selectedChat();
+          finishSelection();
+          if (selected && selected.id === mode.chatId) void deleteChat(ctx, selected);
+          return { consume: true };
+        }
+        if (
+          matchesKey(data, "n") ||
+          matchesKey(data, Key.shift("n")) ||
+          matchesKey(data, Key.escape) ||
+          matchesKey(data, Key.ctrl("c"))
+        ) {
+          finishSelection();
+          return { consume: true };
+        }
+        return { consume: true };
+      }
+      const targetsOnly = mode?.kind === "repost" || mode?.kind === "delete";
       if (matchesKey(data, Key.up)) {
         target.move(-1, targetsOnly);
         refreshFriendsLayout();
@@ -584,6 +673,11 @@ export function installModelFriends(
       if (matchesKey(data, Key.enter)) {
         const selected = target.selectedChat();
         const selectedMode = target.currentSelectionMode();
+        if (selected && selectedMode?.kind === "delete") {
+          target.confirmDelete(selected);
+          refreshFriendsLayout();
+          return { consume: true };
+        }
         finishSelection();
         if (selected && selectedMode?.kind === "repost") {
           void sendRepost(ctx, selected, selectedMode.messageCount);
@@ -718,6 +812,17 @@ export function installModelFriends(
         return;
       }
       beginSidebarSelection(ctx, { kind: "repost", messageCount });
+    },
+  });
+
+  pi.registerCommand("delete", {
+    description: "Delete a saved chat selected from PiChat's left sidebar",
+    handler: async (_rawArgs, ctx) => {
+      if (!ctx.isIdle()) {
+        ctx.ui.notify("Wait for the current reply to finish before deleting a chat.", "warning");
+        return;
+      }
+      beginSidebarSelection(ctx, { kind: "delete" });
     },
   });
 
