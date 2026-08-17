@@ -10,6 +10,11 @@ export interface FriendsLayoutWidths {
   chat: number;
 }
 
+export interface FriendsViewportRange {
+  start: number;
+  end: number;
+}
+
 /**
  * Resolve the regular-TUI split without changing the document's height.
  * The fullscreen TUI uses the same 1:4 ratio through its native layout engine.
@@ -45,4 +50,16 @@ export function getFriendsViewportStart(
   const lines = Math.max(0, Math.floor(documentLineCount));
   const height = Math.max(1, Math.floor(terminalHeight));
   return Math.max(0, lines - height);
+}
+
+/** The only document rows that need sidebar compositing in regular mode. */
+export function getFriendsViewportRange(
+  documentLineCount: number,
+  terminalHeight: number,
+): FriendsViewportRange {
+  const end = Math.max(0, Math.floor(documentLineCount));
+  return {
+    start: getFriendsViewportStart(end, terminalHeight),
+    end,
+  };
 }

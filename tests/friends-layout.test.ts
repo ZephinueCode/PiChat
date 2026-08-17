@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   FRIENDS_MIN_TERMINAL_WIDTH,
   getFriendsLayoutWidths,
+  getFriendsViewportRange,
   getFriendsViewportStart,
 } from "../extensions/friends-layout.ts";
 
@@ -37,4 +38,8 @@ test("regular TUI roster occupies the visible tail without adding document rows"
   assert.equal(getFriendsViewportStart(8, 30), 0);
   assert.equal(getFriendsViewportStart(120, 30), 90);
   assert.equal(getFriendsViewportStart(120, 0), 119);
+  assert.deepEqual(getFriendsViewportRange(5_000, 40), {
+    start: 4_960,
+    end: 5_000,
+  });
 });

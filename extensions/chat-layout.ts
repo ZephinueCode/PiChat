@@ -26,7 +26,7 @@ import {
   FRIENDS_MIN_TERMINAL_WIDTH,
   FRIENDS_MIN_WIDTH,
   getFriendsLayoutWidths,
-  getFriendsViewportStart,
+  getFriendsViewportRange,
 } from "./friends-layout.ts";
 import { splitMarkdownSegments } from "./markdown-segments.ts";
 
@@ -64,6 +64,11 @@ interface UserComponentInternals {
   text: string;
 }
 
+interface UserComponentBuildState {
+  enabled: boolean;
+  theme?: Theme;
+}
+
 interface AssistantMessageLike {
   content: Array<
     | { type: "text"; text: string }
@@ -89,6 +94,8 @@ export const PICHAT_TYPING_WIDGET_KEY = "pichat-typing";
 const globalStore = globalThis as typeof globalThis & {
   [GLOBAL_STATE_KEY]?: RuntimeState;
 };
+
+const userComponentBuildStates = new WeakMap<object, UserComponentBuildState>();
 
 export const runtimeState: RuntimeState = (globalStore[GLOBAL_STATE_KEY] ??= {
   enabled: true,
@@ -214,22 +221,26 @@ function renderRegularSplit(
   if (chatLines.length === 0) return chatLines;
 
   const paneLines = new FriendsPaneSlot(tui).render(layout.friends);
-  const viewportStart = getFriendsViewportStart(chatLines.length, tui.terminal.rows);
+  const viewport = getFriendsViewportRange(chatLines.length, tui.terminal.rows);
   const blank = " ".repeat(layout.friends);
-
-  return chatLines.map((line, index) => {
-    const paneIndex = index - viewportStart;
+  // TuiMainScreen's native Container render returns a fresh document array.
+  // Mutate only its visible tail so the cost of adding the sidebar is bounded
+  // by terminal height instead of growing with the complete transcript.
+  for (let index = viewport.start; index < viewport.end; index += 1) {
+    const line = chatLines[index]!;
+    const paneIndex = index - viewport.start;
     const paneLine = paneIndex >= 0 && paneIndex < paneLines.length
       ? paneLines[paneIndex]!
       : blank;
-    return compositeTuiLine(
+    chatLines[index] = compositeTuiLine(
       paneLine,
       line,
       layout.friends,
       layout.chat,
       width,
     );
-  });
+  }
+  return chatLines;
 }
 
 function patchRootLayout(): void {
@@ -354,6 +365,8 @@ function markdownTransform(
 
 class ChatBubble implements Component {
   private readonly markdown: Markdown;
+  private cachedWidth?: number;
+  private cachedLines?: string[];
 
   constructor(
     source: string,
@@ -381,6 +394,7 @@ class ChatBubble implements Component {
 
   render(width: number): string[] {
     if (width <= 0) return [];
+    if (this.cachedWidth === width && this.cachedLines) return this.cachedLines;
 
     const margin = width >= 24 ? 2 : 0;
     const tailWidth = width >= 16 ? 1 : 0;
@@ -424,10 +438,14 @@ class ChatBubble implements Component {
       }
     });
 
+    this.cachedWidth = width;
+    this.cachedLines = output;
     return output;
   }
 
   invalidate(): void {
+    this.cachedWidth = undefined;
+    this.cachedLines = undefined;
     this.markdown.invalidate();
   }
 }
@@ -599,6 +617,7 @@ function patchUserComponent(): void {
       Boolean(this.markdownTheme);
     if (!runtimeState.enabled || !theme || !compatible) {
       original.call(this);
+      userComponentBuildStates.set(this, { enabled: false });
       return;
     }
 
@@ -614,10 +633,18 @@ function patchUserComponent(): void {
       theme,
       false,
     );
+    userComponentBuildStates.set(this, { enabled: true, theme });
   } as never;
 
   prototype.invalidate = function (this: UserComponentInternals): void {
-    if (runtimeState.enabled && runtimeState.theme) {
+    const theme = runtimeState.theme;
+    const enabled = Boolean(runtimeState.enabled && theme);
+    const previous = userComponentBuildStates.get(this);
+    if (
+      !previous ||
+      previous.enabled !== enabled ||
+      (enabled && previous.theme !== theme)
+    ) {
       (prototype.rebuild as (...args: never[]) => unknown).call(this);
       return;
     }

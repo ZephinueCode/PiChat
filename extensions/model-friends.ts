@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import * as nodePath from "node:path";
 import {
   SessionManager,
@@ -44,6 +45,14 @@ interface ChatSession {
   unreadCount: number;
   active: boolean;
 }
+
+interface StoredModelCacheEntry {
+  mtimeMs: number;
+  size: number;
+  label: string;
+}
+
+const storedModelCache = new Map<string, StoredModelCacheEntry>();
 
 type SidebarSelectionMode =
   | { kind: "chat" }
@@ -100,11 +109,67 @@ function currentModelLabel(ctx: ExtensionContext): string {
 
 function storedModelLabel(info: SessionInfo): string {
   try {
+    const key = canonicalPath(info.path) ?? info.path;
+    const stats = statSync(info.path);
+    const cached = storedModelCache.get(key);
+    if (cached?.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
+      return cached.label;
+    }
     const model = SessionManager.open(info.path).buildSessionContext().model;
-    return model ? `${model.provider}/${model.modelId}` : "Default model";
+    const label = model ? `${model.provider}/${model.modelId}` : "Default model";
+    storedModelCache.set(key, {
+      mtimeMs: stats.mtimeMs,
+      size: stats.size,
+      label,
+    });
+    return label;
   } catch {
     return "Model unavailable";
   }
+}
+
+function messageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      if (!part || typeof part !== "object") return "";
+      const candidate = part as { type?: unknown; text?: unknown };
+      return candidate.type === "text" && typeof candidate.text === "string"
+        ? candidate.text
+        : "";
+    })
+    .join("");
+}
+
+function currentChatSession(
+  ctx: ExtensionContext,
+  unreadCount: (sessionId: string) => number,
+  previous?: ChatSession,
+  bumpActivity = false,
+): ChatSession {
+  let messageCount = 0;
+  let firstUserMessage = "";
+  for (const entry of ctx.sessionManager.getEntries()) {
+    if (entry.type !== "message") continue;
+    messageCount += 1;
+    if (firstUserMessage) continue;
+    const message = entry.message as { role?: unknown; content?: unknown };
+    if (message.role === "user") firstUserMessage = messageText(message.content);
+  }
+
+  const id = ctx.sessionManager.getSessionId();
+  const fallbackTitle = oneLine(firstUserMessage, previous?.title ?? "New chat");
+  return {
+    id,
+    path: ctx.sessionManager.getSessionFile(),
+    title: oneLine(ctx.sessionManager.getSessionName(), fallbackTitle),
+    modelLabel: currentModelLabel(ctx),
+    modified: bumpActivity ? new Date() : (previous?.modified ?? new Date()),
+    messageCount,
+    unreadCount: unreadCount(id),
+    active: true,
+  };
 }
 
 function sessionTitle(info: SessionInfo): string {
@@ -134,16 +199,7 @@ function toChatSessions(
     .sort((a, b) => b.modified.getTime() - a.modified.getTime());
 
   if (!chats.some((chat) => chat.active)) {
-    chats.unshift({
-      id: ctx.sessionManager.getSessionId(),
-      path: currentPath,
-      title: oneLine(ctx.sessionManager.getSessionName(), "New chat"),
-      modelLabel: currentModelLabel(ctx),
-      modified: new Date(),
-      messageCount: ctx.sessionManager.getEntries().filter((entry) => entry.type === "message").length,
-      unreadCount: unreadCount(ctx.sessionManager.getSessionId()),
-      active: true,
-    });
+    chats.unshift(currentChatSession(ctx, unreadCount));
   }
   return chats;
 }
@@ -167,8 +223,17 @@ class ChatListPane implements Component {
   private selectedIndex = 0;
   private selectionMode: SidebarSelectionMode | undefined;
   private loading = true;
+  private cachedWidth?: number;
+  private cachedTerminalRows?: number;
+  private cachedLines?: string[];
 
   constructor(private readonly theme: Theme) {}
+
+  private clearRenderCache(): void {
+    this.cachedWidth = undefined;
+    this.cachedTerminalRows = undefined;
+    this.cachedLines = undefined;
+  }
 
   update(chats: readonly ChatSession[]): void {
     const selectedId = this.chats[this.selectedIndex]?.id;
@@ -179,10 +244,29 @@ class ChatListPane implements Component {
     const active = this.chats.findIndex((chat) => chat.active);
     this.selectedIndex = selected >= 0 ? selected : Math.max(0, active);
     this.loading = false;
+    this.clearRenderCache();
+  }
+
+  updateActive(
+    chat: ChatSession,
+    unreadCount: (sessionId: string) => number,
+  ): void {
+    const next = this.chats
+      .filter((candidate) => candidate.id !== chat.id)
+      .map((candidate) => ({
+        ...candidate,
+        active: false,
+        unreadCount: unreadCount(candidate.id),
+      }));
+    next.push(chat);
+    next.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+    this.update(next);
   }
 
   setLoading(loading: boolean): void {
+    if (this.loading === loading) return;
     this.loading = loading;
+    this.clearRenderCache();
   }
 
   isSelecting(): boolean {
@@ -197,12 +281,14 @@ class ChatListPane implements Component {
       const firstTarget = this.chats.findIndex((chat) => !chat.active && Boolean(chat.path));
       if (firstTarget < 0) {
         this.selectionMode = undefined;
+        this.clearRenderCache();
         return false;
       }
       this.selectedIndex = firstTarget;
     } else {
       this.selectedIndex = active >= 0 ? active : 0;
     }
+    this.clearRenderCache();
     return true;
   }
 
@@ -210,6 +296,7 @@ class ChatListPane implements Component {
     this.selectionMode = undefined;
     const active = this.chats.findIndex((chat) => chat.active);
     if (active >= 0) this.selectedIndex = active;
+    this.clearRenderCache();
   }
 
   currentSelectionMode(): SidebarSelectionMode | undefined {
@@ -222,6 +309,7 @@ class ChatListPane implements Component {
       chatId: chat.id,
       chatTitle: chat.title,
     };
+    this.clearRenderCache();
   }
 
   move(delta: 1 | -1, targetsOnly = false): void {
@@ -232,6 +320,7 @@ class ChatListPane implements Component {
       const chat = this.chats[candidate]!;
       if (!targetsOnly || (!chat.active && Boolean(chat.path))) {
         this.selectedIndex = candidate;
+        this.clearRenderCache();
         return;
       }
     }
@@ -246,7 +335,10 @@ class ChatListPane implements Component {
       const chat = this.chats[index]!;
       return !targetsOnly || (!chat.active && Boolean(chat.path));
     });
-    if (candidate !== undefined) this.selectedIndex = candidate;
+    if (candidate !== undefined) {
+      this.selectedIndex = candidate;
+      this.clearRenderCache();
+    }
   }
 
   selectedChat(): ChatSession | undefined {
@@ -335,6 +427,14 @@ class ChatListPane implements Component {
   }
 
   render(width: number): string[] {
+    const terminalRows = runtimeState.layoutTui?.terminal.rows ?? 30;
+    if (
+      this.cachedWidth === width &&
+      this.cachedTerminalRows === terminalRows &&
+      this.cachedLines
+    ) {
+      return this.cachedLines;
+    }
     const w = Math.max(12, width);
     const count = this.loading ? "…" : `${this.chats.length}`;
     const title = this.selectionMode?.kind === "repost"
@@ -375,10 +475,12 @@ class ChatListPane implements Component {
 
     if (!this.loading && this.chats.length === 0) {
       lines.push(this.row(this.theme.fg("muted", "  No saved chats"), w));
+      this.cachedWidth = width;
+      this.cachedTerminalRows = terminalRows;
+      this.cachedLines = lines;
       return lines;
     }
 
-    const terminalRows = runtimeState.layoutTui?.terminal.rows ?? 30;
     const maxVisible = Math.max(
       3,
       Math.min(
@@ -417,10 +519,15 @@ class ChatListPane implements Component {
         ),
       );
     }
+    this.cachedWidth = width;
+    this.cachedTerminalRows = terminalRows;
+    this.cachedLines = lines;
     return lines;
   }
 
-  invalidate(): void {}
+  invalidate(): void {
+    this.clearRenderCache();
+  }
 }
 
 export function installModelFriends(
@@ -473,6 +580,21 @@ export function installModelFriends(
       ctx.ui.notify(`Could not load chats: ${errorText(error)}`, "warning");
       refreshFriendsLayout();
     }
+  };
+
+  const refreshActiveSession = (
+    ctx: ExtensionContext,
+    bumpActivity = false,
+  ): void => {
+    if (ctx.mode !== "tui") return;
+    const target = ensurePane(ctx);
+    const unreadCount = (sessionId: string): number => handoff.unreadCount(sessionId);
+    target.updateActive(
+      currentChatSession(ctx, unreadCount, target.activeChat(), bumpActivity),
+      unreadCount,
+    );
+    updateStatus(ctx);
+    refreshFriendsLayout();
   };
 
   const sync = (ctx: ExtensionContext): void => {
@@ -827,15 +949,15 @@ export function installModelFriends(
   });
 
   pi.on("model_select", (_event, ctx) => {
-    sync(ctx);
+    refreshActiveSession(ctx);
   });
 
   pi.on("session_info_changed", (_event, ctx) => {
-    void loadSessions(ctx);
+    refreshActiveSession(ctx);
   });
 
   pi.on("agent_end", (_event, ctx) => {
-    void loadSessions(ctx);
+    refreshActiveSession(ctx, true);
   });
 
   return {
