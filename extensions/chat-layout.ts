@@ -25,8 +25,10 @@ import {
   CHAT_MIN_WIDTH,
   FRIENDS_MIN_TERMINAL_WIDTH,
   FRIENDS_MIN_WIDTH,
+  FRIENDS_SCROLLBACK_OVERSCAN,
   getFriendsLayoutWidths,
   getFriendsViewportRange,
+  getFriendsViewportStart,
 } from "./friends-layout.ts";
 import { splitMarkdownSegments } from "./markdown-segments.ts";
 
@@ -221,14 +223,22 @@ function renderRegularSplit(
   if (chatLines.length === 0) return chatLines;
 
   const paneLines = new FriendsPaneSlot(tui).render(layout.friends);
-  const viewport = getFriendsViewportRange(chatLines.length, tui.terminal.rows);
+  const paneViewportStart = getFriendsViewportStart(
+    chatLines.length,
+    tui.terminal.rows,
+  );
+  const compositeRange = getFriendsViewportRange(
+    chatLines.length,
+    tui.terminal.rows,
+    FRIENDS_SCROLLBACK_OVERSCAN,
+  );
   const blank = " ".repeat(layout.friends);
-  // TuiMainScreen's native Container render returns a fresh document array.
-  // Mutate only its visible tail so the cost of adding the sidebar is bounded
-  // by terminal height instead of growing with the complete transcript.
-  for (let index = viewport.start; index < viewport.end; index += 1) {
+  // Keep several nearby scrollback screens aligned while bounding the sidebar
+  // work independently of the complete transcript. Only the current screen
+  // receives roster content; earlier overscan rows get a blank left column.
+  for (let index = compositeRange.start; index < compositeRange.end; index += 1) {
     const line = chatLines[index]!;
-    const paneIndex = index - viewport.start;
+    const paneIndex = index - paneViewportStart;
     const paneLine = paneIndex >= 0 && paneIndex < paneLines.length
       ? paneLines[paneIndex]!
       : blank;

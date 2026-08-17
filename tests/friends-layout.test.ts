@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   FRIENDS_MIN_TERMINAL_WIDTH,
+  FRIENDS_SCROLLBACK_OVERSCAN,
   getFriendsLayoutWidths,
   getFriendsViewportRange,
   getFriendsViewportStart,
@@ -38,8 +39,12 @@ test("regular TUI roster occupies the visible tail without adding document rows"
   assert.equal(getFriendsViewportStart(8, 30), 0);
   assert.equal(getFriendsViewportStart(120, 30), 90);
   assert.equal(getFriendsViewportStart(120, 0), 119);
-  assert.deepEqual(getFriendsViewportRange(5_000, 40), {
-    start: 4_960,
+  assert.deepEqual(getFriendsViewportRange(5_000, 40, FRIENDS_SCROLLBACK_OVERSCAN), {
+    start: 4_800,
     end: 5_000,
+  });
+  assert.deepEqual(getFriendsViewportRange(120, 30, FRIENDS_SCROLLBACK_OVERSCAN), {
+    start: 0,
+    end: 120,
   });
 });

@@ -3,6 +3,7 @@ export const CHAT_MIN_WIDTH = 72;
 export const FRIENDS_WIDTH_PARTS = 1;
 export const CHAT_WIDTH_PARTS = 4;
 export const FRIENDS_MIN_TERMINAL_WIDTH = FRIENDS_MIN_WIDTH + CHAT_MIN_WIDTH;
+export const FRIENDS_SCROLLBACK_OVERSCAN = 5;
 
 export interface FriendsLayoutWidths {
   visible: boolean;
@@ -56,10 +57,13 @@ export function getFriendsViewportStart(
 export function getFriendsViewportRange(
   documentLineCount: number,
   terminalHeight: number,
+  screenCount = 1,
 ): FriendsViewportRange {
   const end = Math.max(0, Math.floor(documentLineCount));
+  const height = Math.max(1, Math.floor(terminalHeight));
+  const screens = Math.max(1, Math.floor(screenCount));
   return {
-    start: getFriendsViewportStart(end, terminalHeight),
+    start: Math.max(0, end - height * screens),
     end,
   };
 }
